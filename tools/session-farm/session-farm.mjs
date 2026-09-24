@@ -9,7 +9,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "AIR_SESSION_FARM_STATE/1";
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const DEFAULT_CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), "session-farm.config.json");
 
 export function hashText(text = "") {
@@ -500,7 +500,17 @@ class SessionFarm {
   }
 
   async ensureTabs(options = {}) {
-    return this.withEnsureTabsLock(() => this._ensureTabs(options));
+    return this.withEnsureTabsLock(async () => {
+      let targets = await this.cdp.targets();
+      await this.resolveTargets(targets);
+      const result = await this._ensureTabs(options);
+      if (result.created?.length) {
+        await sleep(Number(this.config.browser?.postSpawnSettleMs || 750));
+        targets = await this.cdp.targets();
+        await this.resolveTargets(targets);
+      }
+      return result;
+    });
   }
 
   async _ensureTabs({ force = false } = {}) {
@@ -706,14 +716,7 @@ class SessionFarm {
         try{guard=await this.guardApply();}catch(error){guard={ok:false,error:String(error?.message||error)};this.event("guard-error",guard);}
         this.lastGuardMs=Date.now();
       }
-      let targets=await this.cdp.targets();
-      await this.resolveTargets(targets);
       const tabs=await this.ensureTabs();
-      if(tabs.created?.length){
-        await sleep(Number(this.config.browser?.postSpawnSettleMs||750));
-        targets=await this.cdp.targets();
-        await this.resolveTargets(targets);
-      }
       await this.probeAll();
       const controls=await this.maybeApplyOrchestratorControl(),continuations=[];
       for(const worker of this.config.workers){const result=await this.continueSlot(worker.id);if(result.ok||!result.skipped)continuations.push({worker:worker.id,...result});if(result.ok)await sleep(300);}
@@ -768,11 +771,7 @@ async function createControlServer(farm){
     if(req.method!=="POST")return sendJson(res,404,{ok:false,error:"not-found"});
     const body=await parseBody(req);
     if(url.pathname==="/tick")return sendJson(res,200,await farm.tick());
-    if(url.pathname==="/ensure-tabs"){
-      const targets=await farm.cdp.targets();
-      await farm.resolveTargets(targets);
-      return sendJson(res,200,await farm.ensureTabs({force:true}));
-    }
+    if(url.pathname==="/ensure-tabs")return sendJson(res,200,await farm.ensureTabs({force:true}));
     if(url.pathname==="/continue")return sendJson(res,200,await farm.continueSlot(String(body.worker||""),{force:true,prompt:body.prompt??null,reason:"mcp-manual"}));
     if(url.pathname==="/pause"||url.pathname==="/resume"){const slot=farm.state.slots[String(body.worker||"")];if(!slot||slot.role!=="worker")return sendJson(res,404,{ok:false,error:"unknown-worker"});slot.paused=url.pathname==="/pause";await farm.persist();return sendJson(res,200,{ok:true,worker:slot.id,paused:slot.paused});}
     if(url.pathname==="/bind")return sendJson(res,200,await farm.bind(String(body.slot||""),String(body.url||"")));
