@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const { SESSION_FARM_TOOLS } = await import('../src/session-farm-tools.mjs');
+const mcp = fs.readFileSync(new URL('../src/mcp.ts', import.meta.url), 'utf8');
+const index = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const relay = fs.readFileSync(new URL('../windows-agent/transductive_agent/relay_agent.py', import.meta.url), 'utf8');
+const bridge = fs.readFileSync(new URL('../windows-agent/transductive_agent/session_farm_bridge.py', import.meta.url), 'utf8');
+
+const byName = new Map(SESSION_FARM_TOOLS.map((tool) => [tool.name, tool]));
+for (const name of ['farm_deploy', 'farm_tick', 'farm_guard', 'farm_stop']) {
+  assert.equal(byName.get(name)?.annotations?.destructiveHint, true, `${name} must require windows.admin`);
+}
+assert.equal(byName.get('farm_status')?.annotations?.readOnlyHint, true, 'farm_status must remain windows.read');
+for (const name of ['farm_start', 'farm_ensure_tabs', 'farm_continue', 'farm_pause', 'farm_resume', 'farm_bind']) {
+  const a = byName.get(name)?.annotations || {};
+  assert.equal(a.readOnlyHint, undefined, `${name} must not be read-only`);
+  assert.equal(a.destructiveHint, undefined, `${name} should remain ordinary windows.write`);
+}
+
+assert.match(mcp, /destructiveHint === true[\s\S]*windows\.admin/);
+assert.match(mcp, /readOnlyHint === true[\s\S]*windows\.read/);
+assert.match(index, /name === 'farm_deploy'\) return 300_000/);
+assert.match(relay, /farm\.call\(name, args\) if farm\.handles\(name\) else upstream\.call_tool\(name, args\)/);
+
+assert.match(bridge, /tools[\\\/]session-farm[\\\/]deploy-windows\.ps1/);
+assert.match(bridge, /if host not in \{"127\.0\.0\.1", "localhost", "::1"\}/);
+assert.match(bridge, /if not url\.startswith\("https:\/\/chatgpt\.com\/"\)/);
+assert.doesNotMatch(bridge, /shell\s*=\s*True/);
+assert.doesNotMatch(bridge, /os\.system\s*\(/);
+assert.doesNotMatch(bridge, /subprocess\.(?:call|run|Popen)\([^\n]*shell\s*=\s*True/);
+
+console.log('TRANSDUCTIVE_SESSION_FARM_SECURITY_REGRESSION_OK scope_boundary=pass fixed_deployer=pass loopback_only=pass chatgpt_bind_only=pass no_shell_true=pass');
