@@ -41,18 +41,24 @@
   },
   "browser": {
     "chatUrlRegex": "^https://chatgpt\\.com/(c/|g/|$)",
-    "autoAssignUnboundWorkers": true
+    "autoAssignUnboundWorkers": true,
+    "ensureTabs": false,
+    "newTabUrl": "https://chatgpt.com/",
+    "spawnGraceMs": 15000,
+    "spawnSpacingMs": 250,
+    "postSpawnSettleMs": 750
   },
   "workers": [
-    {"id": "w1", "urlIncludes": ""},
-    {"id": "w2", "urlIncludes": ""},
-    {"id": "w3", "urlIncludes": ""},
-    {"id": "w4", "urlIncludes": ""},
-    {"id": "w5", "urlIncludes": ""},
-    {"id": "w6", "urlIncludes": ""}
+    {"id": "w1", "urlIncludes": "", "launchUrl": ""},
+    {"id": "w2", "urlIncludes": "", "launchUrl": ""},
+    {"id": "w3", "urlIncludes": "", "launchUrl": ""},
+    {"id": "w4", "urlIncludes": "", "launchUrl": ""},
+    {"id": "w5", "urlIncludes": "", "launchUrl": ""},
+    {"id": "w6", "urlIncludes": "", "launchUrl": ""}
   ],
   "orchestrator": {
     "id": "orch",
-    "urlIncludes": "REPLACE_WITH_ORCHESTRATOR_CHAT_URL_FRAGMENT"
+    "urlIncludes": "REPLACE_WITH_ORCHESTRATOR_CHAT_URL_FRAGMENT",
+    "launchUrl": ""
   }
 }
