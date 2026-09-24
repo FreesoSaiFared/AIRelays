@@ -43,6 +43,9 @@ Write-Step 'installing pinned relay + upstream winrdp-mcp 0.1.5'
 & $Python -m pip install --disable-pip-version-check --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed.' }
 
+# The local package is installed from the extracted release capsule. Its pyproject
+# pins winrdp-mcp[agent-ui]==0.1.5. SkipAgentUi is reserved for a future minimal
+# package split; the current capsule intentionally includes the full upstream UI extra.
 & $Python -m pip install --disable-pip-version-check $AgentSource
 if ($LASTEXITCODE -ne 0) { throw 'agent installation failed.' }
 
