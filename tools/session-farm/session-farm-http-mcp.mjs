@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(HERE, "session-farm.config.json");
 const DAEMON = path.join(HERE, "session-farm.mjs");
-const VERSION = "0.1.0";
+const DASHBOARD = path.join(HERE, "session-farm-dashboard.html");
+const VERSION = "0.1.1";
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -152,6 +153,16 @@ function sendJson(res, status, value, extraHeaders = {}) {
   res.end(body);
 }
 
+async function sendDashboard(res) {
+  const body = await fsp.readFile(DASHBOARD);
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": String(body.length),
+  });
+  res.end(body);
+}
+
 function parseArgs(argv) {
   const args = {
     config: process.env.AIRELAYS_SESSION_FARM_CONFIG || DEFAULT_CONFIG,
@@ -166,15 +177,38 @@ function parseArgs(argv) {
   return args;
 }
 
+async function dashboardApi(configPath, url, req) {
+  await ensureDaemon(configPath);
+  if (req.method === "GET" && url.pathname === "/api/status") return daemonApi(configPath, "/status");
+  if (req.method !== "POST") throw new Error("method-not-allowed");
+  const body = JSON.parse((await readBody(req)) || "{}");
+  if (url.pathname === "/api/continue") return daemonApi(configPath, "/continue", { method: "POST", body: { worker: body.worker } });
+  if (url.pathname === "/api/pause") return daemonApi(configPath, "/pause", { method: "POST", body: { worker: body.worker } });
+  if (url.pathname === "/api/resume") return daemonApi(configPath, "/resume", { method: "POST", body: { worker: body.worker } });
+  if (url.pathname === "/api/tick") return daemonApi(configPath, "/tick", { method: "POST", body: {} });
+  if (url.pathname === "/api/guard") return daemonApi(configPath, "/guard", { method: "POST", body: {} });
+  throw new Error("not-found");
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const configPath = path.resolve(args.config);
   await fsp.access(configPath);
+  await fsp.access(DASHBOARD);
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://session-farm-mcp.local");
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) return sendDashboard(res);
       if (req.method === "GET" && url.pathname === "/healthz") {
         return sendJson(res, 200, { ok: true, service: "airelays-session-farm-http-mcp", version: VERSION, daemonHealthy: await healthy(configPath) });
+      }
+      if (url.pathname.startsWith("/api/")) {
+        try { return sendJson(res, 200, await dashboardApi(configPath, url, req)); }
+        catch (error) {
+          const message = String(error?.message || error);
+          const status = message === "not-found" ? 404 : message === "method-not-allowed" ? 405 : 500;
+          return sendJson(res, status, { ok: false, error: message });
+        }
       }
       if (url.pathname !== "/mcp") return sendJson(res, 404, { ok: false, error: "not-found" });
       if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method-not-allowed" }, { allow: "POST" });
@@ -194,7 +228,7 @@ async function main() {
     }
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(args.port, args.host, resolve); });
-  console.log(JSON.stringify({ event: "started", service: "airelays-session-farm-http-mcp", version: VERSION, pid: process.pid, host: args.host, port: args.port, endpoint: `http://${args.host}:${args.port}/mcp`, configPath }));
+  console.log(JSON.stringify({ event: "started", service: "airelays-session-farm-http-mcp", version: VERSION, pid: process.pid, host: args.host, port: args.port, endpoint: `http://${args.host}:${args.port}/mcp`, dashboard: `http://${args.host}:${args.port}/`, configPath }));
 }
 
 main().catch((error) => { console.error(error?.stack || error); process.exit(1); });
