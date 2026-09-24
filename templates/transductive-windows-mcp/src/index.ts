@@ -1,4 +1,4 @@
-import { handleMcp } from './mcp.ts';
+import { handleMcp, TOTAL_TOOL_COUNT } from './mcp.ts';
 export { DeviceHub } from './device-hub.ts';
 export { PairingHub } from './pairing-hub.ts';
 
@@ -27,7 +27,7 @@ function protectedResource(url: URL) {
 }
 
 function isAuthorized(request: Request, env: Env): boolean {
-  if (!env.MCP_BEARER_TOKEN) return true; // OAuthProvider wrapper replaces this in production.
+  if (!env.MCP_BEARER_TOKEN) return true;
   return request.headers.get('Authorization') === `Bearer ${env.MCP_BEARER_TOKEN}`;
 }
 
@@ -48,15 +48,15 @@ export async function dispatchToDevice(env: Env, name: string, args: Record<stri
 
 function home(url: URL): Response {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transductive Windows MCP</title><style>
-  :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f0}body{margin:0}.wrap{max-width:920px;margin:auto;padding:56px 22px}.eyebrow{letter-spacing:.16em;text-transform:uppercase;font-size:12px;font-weight:700}.hero{font-size:clamp(42px,7vw,78px);line-height:.94;letter-spacing:-.055em;margin:16px 0 24px;max-width:780px}.sub{font-size:20px;line-height:1.5;max-width:720px;color:#4a4a43}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:42px}.card{background:#fff;border:1px solid #d9d9d0;border-radius:18px;padding:20px;box-shadow:0 8px 30px #00000008}.n{font-size:12px;font-weight:800;margin-bottom:30px}.ok{display:inline-flex;gap:8px;align-items:center;font-weight:700}.dot{width:9px;height:9px;border-radius:50%;background:#1d9b55}.dim{color:#6a6a62;font-size:14px;line-height:1.45}.footer{margin-top:38px;padding-top:18px;border-top:1px solid #d4d4cc;font-size:13px;color:#686860}</style></head><body><main class="wrap"><div class="eyebrow">Transductive / user-owned infrastructure</div><h1 class="hero">Your Windows MCP.<br>In your Cloudflare account.</h1><p class="sub">A ChatGPT-ready control plane that stays yours. The Worker handles MCP and authorization; a resident Windows relay performs native machine actions over an outbound connection.</p><section class="grid"><div class="card"><div class="n">01 / WORKER</div><div class="ok"><span class="dot"></span> MCP endpoint ready</div><p class="dim">${url.origin}/mcp<br>Modern + legacy protocol compatibility.</p></div><div class="card"><div class="n">02 / WINDOWS</div><strong>Pair a device</strong><p class="dim">Primary route: outbound WSS. Tailscale and one port-mapped listener remain optional recovery planes.</p></div><div class="card"><div class="n">03 / OWNERSHIP</div><strong>User-owned deployment</strong><p class="dim">Designed for Deploy to Cloudflare. Credentials and machine state stay in the user's infrastructure.</p></div></section><div class="footer">TRANSDUCTIVE_WINDOWS_MCP/1 · generated tool surface: 144 upstream tools</div></main></body></html>`;
+  :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f0}body{margin:0}.wrap{max-width:920px;margin:auto;padding:56px 22px}.eyebrow{letter-spacing:.16em;text-transform:uppercase;font-size:12px;font-weight:700}.hero{font-size:clamp(42px,7vw,78px);line-height:.94;letter-spacing:-.055em;margin:16px 0 24px;max-width:780px}.sub{font-size:20px;line-height:1.5;max-width:720px;color:#4a4a43}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:42px}.card{background:#fff;border:1px solid #d9d9d0;border-radius:18px;padding:20px;box-shadow:0 8px 30px #00000008}.n{font-size:12px;font-weight:800;margin-bottom:30px}.ok{display:inline-flex;gap:8px;align-items:center;font-weight:700}.dot{width:9px;height:9px;border-radius:50%;background:#1d9b55}.dim{color:#6a6a62;font-size:14px;line-height:1.45}.footer{margin-top:38px;padding-top:18px;border-top:1px solid #d4d4cc;font-size:13px;color:#686860}</style></head><body><main class="wrap"><div class="eyebrow">Transductive / user-owned infrastructure</div><h1 class="hero">Your Windows MCP.<br>In your Cloudflare account.</h1><p class="sub">A ChatGPT-ready control plane that stays yours. The Worker handles MCP and authorization; a resident Windows relay performs native machine actions and fixed-function Session Farm control over an outbound connection.</p><section class="grid"><div class="card"><div class="n">01 / WORKER</div><div class="ok"><span class="dot"></span> MCP endpoint ready</div><p class="dim">${url.origin}/mcp<br>Modern + legacy protocol compatibility.</p></div><div class="card"><div class="n">02 / WINDOWS</div><strong>Pair a device</strong><p class="dim">Primary route: outbound WSS. Tailscale and one port-mapped listener remain optional recovery planes.</p></div><div class="card"><div class="n">03 / SESSION FARM</div><strong>Six workers + orchestrator</strong><p class="dim">Deploy, inspect, heal and continue the external ChatGPT session farm through the same paired Windows MCP.</p></div></section><div class="footer">TRANSDUCTIVE_WINDOWS_MCP/2 · ${TOTAL_TOOL_COUNT} tools: 144 upstream Windows tools + 11 Session Farm controls</div></main></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/') return home(url);
-  if (url.pathname === '/healthz') return json({ status: 'ok', service: 'transductive-winrdp-worker' });
-  if (url.pathname === '/readyz') return json({ status: 'ready', tools: 144, deviceHubBound: !!env.DEVICE_HUB || !!env.FIXTURE_DISPATCH });
+  if (url.pathname === '/healthz') return json({ status: 'ok', service: 'transductive-windows-worker' });
+  if (url.pathname === '/readyz') return json({ status: 'ready', tools: TOTAL_TOOL_COUNT, upstreamTools: 144, sessionFarmTools: 11, deviceHubBound: !!env.DEVICE_HUB || !!env.FIXTURE_DISPATCH });
   if (url.pathname === '/.well-known/oauth-protected-resource' || url.pathname === '/.well-known/oauth-protected-resource/mcp') return json(protectedResource(url));
   if (url.pathname === '/mcp') {
     if (!isAuthorized(request, env)) {
