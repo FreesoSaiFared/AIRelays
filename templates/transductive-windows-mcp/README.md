@@ -16,7 +16,7 @@ ChatGPT
   -> Windows
 ```
 
-The public MCP surface is now one control plane rather than two disconnected plugins: **144 generated upstream Windows tools plus 11 Session Farm tools = 155 tools**. Session Farm calls travel through the same signed outbound device connection as the normal Windows tools.
+The public MCP surface is one control plane rather than two disconnected plugins: **144 generated upstream Windows tools plus 12 Session Farm tools = 156 tools**. Session Farm calls travel through the same signed outbound device connection as normal Windows tools.
 
 ## Deploy
 
@@ -50,6 +50,7 @@ The resident relay intercepts only these fixed tool names locally; every other t
 - `farm_status`
 - `farm_tick`
 - `farm_ensure_tabs`
+- `farm_seed`
 - `farm_continue`
 - `farm_pause`
 - `farm_resume`
@@ -57,15 +58,15 @@ The resident relay intercepts only these fixed tool names locally; every other t
 - `farm_guard`
 - `farm_stop`
 
-This removes the need for ChatGPT to discover a second Session Farm connector. The Cloudflare MCP advertises the farm controls directly, and the paired Windows relay routes them to the canonical `tools/session-farm/` subsystem.
+This removes the need for ChatGPT to discover a second Session Farm connector. The Cloudflare MCP advertises the farm controls directly, and the paired Windows relay routes them to canonical helpers under `tools/session-farm/`.
 
-The first `farm_deploy` or `farm_start` call should provide `repoRoot` when the resident relay does not already know the AIRelays checkout. The bridge persists that repository root and the resolved Session Farm config path in:
+The first `farm_deploy` call should provide `repoRoot` when the resident relay does not already know the AIRelays checkout. The bridge persists that repository root and the resolved Session Farm config path in:
 
 ```text
 %ProgramData%\Transductive\WindowsMCP\session-farm-bridge.json
 ```
 
-After that, normal farm calls need no workstation paths. `farm_deploy` invokes only the canonical `tools\session-farm\deploy-windows.ps1` script. The bridge does not expose a general-purpose shell.
+After that, normal farm calls need no workstation paths. `farm_deploy` invokes only canonical `tools\session-farm\deploy-windows.ps1`; `farm_seed` invokes only canonical `tools\session-farm\seed-session.mjs`. The bridge does not expose a general-purpose shell.
 
 Example first deployment arguments:
 
@@ -80,10 +81,35 @@ Example first deployment arguments:
 
 Use the actual checkout path on the paired machine; the example path is not a default.
 
+## Bootstrap a newly created session exactly once
+
+Self-healing can reopen an established conversation URL, but a genuinely new ChatGPT tab still needs its first mission. `farm_seed` provides that missing first-turn primitive without putting browser automation back in an extension.
+
+Example:
+
+```json
+{
+  "slot": "w1",
+  "prompt": "You are worker 1. Own the mechanical verification task. Continue autonomously and end unfinished turns with the TF_CONTINUE marker."
+}
+```
+
+The prompt is sent from the resident relay to the canonical Node seeder over **stdin**, not a process command line. The seeder verifies the farm and CDP listeners are loopback-only, resolves the exact slot target ID, requires the target to be ready, and by default refuses to seed any conversation that already contains a user turn. That makes repeated setup idempotent: the first successful bootstrap creates the user turn; later calls skip with `existing-user-turn`.
+
+`force=true` exists for deliberate reseeding of an existing conversation, but normal fleet creation should leave it false.
+
+A useful startup pattern is:
+
+1. `farm_deploy`;
+2. `farm_ensure_tabs` twice, requiring the second call to create zero tabs;
+3. `farm_seed` `orch` with the orchestrator contract and task context;
+4. `farm_seed` each newly blank worker with its one-time mission;
+5. thereafter let each worker define its own continuation frontier and let the daemon submit only generic `continue` turns.
+
 Scope mapping follows the existing MCP authorization model:
 
 - `farm_status` -> `windows.read`
-- ordinary tab/session state changes -> `windows.write`
+- seeding and ordinary tab/session state changes -> `windows.write`
 - `farm_deploy`, `farm_tick`, `farm_guard`, and `farm_stop` -> `windows.admin`
 
 `farm_tick` is admin-scoped because a configured tick may run the process interference guard. `farm_deploy` receives an extended device-dispatch timeout so validation and scheduled-task installation can finish without the normal short tool timeout.
@@ -98,7 +124,7 @@ https://YOUR-WORKER.workers.dev/mcp
 
 as a custom MCP/plugin endpoint in ChatGPT. The Worker advertises OAuth protected-resource metadata, CIMD support, PKCE S256, and explicit capability consent.
 
-A single `tools/list` should expose all 155 tools, including `farm_status` and `farm_deploy`.
+A single `tools/list` should expose all 156 tools, including `farm_status`, `farm_deploy`, and `farm_seed`.
 
 ## Local contract check
 
@@ -106,7 +132,7 @@ A single `tools/list` should expose all 155 tools, including `farm_status` and `
 npm test
 ```
 
-This verifies the template is internally complete, preserves the exact 144-tool generated upstream surface, adds exactly 11 non-colliding Session Farm tools, pins OAuth provider 1.0.0, and binds grants to the exact MCP resource.
+This verifies the template is internally complete, preserves the exact 144-tool generated upstream surface, adds exactly 12 non-colliding Session Farm tools, pins OAuth provider 1.0.0, and binds grants to the exact MCP resource.
 
 The Python resident-agent package should also byte-compile cleanly:
 
@@ -120,4 +146,4 @@ The outbound Worker relay is the primary route. Tailscale/MagicDNS and a narrow 
 
 ## Status
 
-The generated 144-tool Windows contract remains immutable. The 11 Session Farm controls are a separate fixed-function overlay and do not alter upstream winrdp tool semantics. Real Cloudflare deployment, physical Windows pairing, Brave CDP availability, seven live ChatGPT tabs, and actual continuation round-trips remain provider/device acceptance steps until exercised on the paired workstation.
+The generated 144-tool Windows contract remains immutable. The 12 Session Farm controls are a separate fixed-function overlay and do not alter upstream winrdp tool semantics. Real Cloudflare deployment, physical Windows pairing, Brave CDP availability, seven live ChatGPT tabs, initial seed round-trips, and actual continuation round-trips remain provider/device acceptance steps until exercised on the paired workstation.
