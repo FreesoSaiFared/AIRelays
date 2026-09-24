@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractFarmControl, hashText, isEligibleContinuation, validateConfig } from "./session-farm.mjs";
+import { extractFarmControl, hashText, isEligibleContinuation, slotLaunchUrl, validateConfig } from "./session-farm.mjs";
 
 function policy(overrides = {}) {
   return {
@@ -39,6 +39,44 @@ test("requires exactly six workers", () => {
   };
   assert.equal(validateConfig(config), config);
   assert.throws(() => validateConfig({ ...config, workers: config.workers.slice(0, 5) }), /exactly six/);
+});
+
+test("slot launch URL prefers explicit launchUrl, then persisted conversation, then full urlIncludes", () => {
+  assert.equal(
+    slotLaunchUrl(
+      { launchUrl: "https://chatgpt.com/c/explicit", urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "https://chatgpt.com/c/state" },
+      { newTabUrl: "https://chatgpt.com/" },
+    ),
+    "https://chatgpt.com/c/explicit",
+  );
+  assert.equal(
+    slotLaunchUrl(
+      { urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "https://chatgpt.com/c/state" },
+      { newTabUrl: "https://chatgpt.com/" },
+    ),
+    "https://chatgpt.com/c/state",
+  );
+  assert.equal(
+    slotLaunchUrl(
+      { urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "" },
+      { newTabUrl: "https://chatgpt.com/" },
+    ),
+    "https://chatgpt.com/c/config",
+  );
+});
+
+test("slot launch URL falls back to ChatGPT root", () => {
+  assert.equal(slotLaunchUrl({}, {}, {}), "https://chatgpt.com/");
+});
+
+test("slot launch URL rejects a non-http explicit launch URL", () => {
+  assert.throws(
+    () => slotLaunchUrl({ launchUrl: "file:///tmp/nope" }, {}, { newTabUrl: "" }),
+    /invalid launch URL/,
+  );
 });
 
 test("worker continuation is one-shot per assistant output", () => {
