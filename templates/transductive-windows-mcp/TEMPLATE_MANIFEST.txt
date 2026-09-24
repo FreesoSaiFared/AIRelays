@@ -6,7 +6,7 @@ src/device-hub.ts	5202
 src/device-protocol.ts	2318
 src/index.ts	7650
 src/mcp.ts	5568
-src/oauth-entry.ts	11238
+src/oauth-entry.ts	10831
 src/pairing-hub.ts	4193
 src/tools-data/chunk-00.mjs	4019
 src/tools-data/chunk-01.mjs	4019
@@ -23,9 +23,9 @@ windows-agent/pyproject.toml	513
 windows-agent/transductive_agent/__init__.py	61
 windows-agent/transductive_agent/__main__.py	633
 windows-agent/transductive_agent/pair_device.py	2594
-windows-agent/transductive_agent/protocol.py	2890
+windows-agent/transductive_agent/protocol.py	2856
 windows-agent/transductive_agent/relay_agent.py	5367
 windows-agent/transductive_agent/secret_store.py	2647
-windows-agent/transductive_agent/stdio_mcp.py	7053
+windows-agent/transductive_agent/stdio_mcp.py	6866
 windows-agent/uninstall-windows.ps1	707
 wrangler.jsonc	666
