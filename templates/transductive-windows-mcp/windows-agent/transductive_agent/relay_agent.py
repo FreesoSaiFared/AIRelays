@@ -14,6 +14,7 @@ from websockets.sync.client import connect
 
 from .protocol import ReplayWindow, make_envelope, sign_envelope, verify_envelope
 from .secret_store import load_config
+from .session_farm_bridge import SessionFarmBridge
 from .stdio_mcp import StdioMcpClient
 
 LOG = logging.getLogger("transductive_windows_mcp")
@@ -33,7 +34,13 @@ def _send_signed(ws: Any, kind: str, device_id: str, op_id: str, body: Any, secr
     ws.send(json.dumps(frame, ensure_ascii=False, separators=(",", ":")))
 
 
-def run_connection(worker_url: str, device_id: str, secret: str, upstream: StdioMcpClient) -> None:
+def run_connection(
+    worker_url: str,
+    device_id: str,
+    secret: str,
+    upstream: StdioMcpClient,
+    farm: SessionFarmBridge,
+) -> None:
     url = websocket_url(worker_url, device_id)
     replay = ReplayWindow()
     LOG.info("connecting device=%s endpoint=%s", device_id, url)
@@ -72,10 +79,10 @@ def run_connection(worker_url: str, device_id: str, secret: str, upstream: Stdio
                 _send_signed(ws, "error", device_id, op_id, {"error": "INVALID_COMMAND"}, secret)
                 continue
             try:
-                value = upstream.call_tool(name, args)
+                value = farm.call(name, args) if farm.handles(name) else upstream.call_tool(name, args)
                 _send_signed(ws, "result", device_id, op_id, {"result": value}, secret)
             except Exception as exc:
-                LOG.exception("upstream tool failed name=%s", name)
+                LOG.exception("device tool failed name=%s", name)
                 _send_signed(ws, "error", device_id, op_id, {"error": str(exc)}, secret)
 
 
@@ -89,12 +96,13 @@ def run_forever(config: dict[str, Any]) -> None:
     else:
         command = [str(x) for x in upstream_command]
     delay = 1.0
+    farm = SessionFarmBridge(config)
     with StdioMcpClient(command, request_timeout=float(config.get("toolTimeoutSeconds", 120))) as upstream:
         tools = upstream.list_tools()
-        LOG.info("upstream ready tools=%d", len(tools))
+        LOG.info("upstream ready tools=%d local_session_farm_tools=11", len(tools))
         while True:
             try:
-                run_connection(worker_url, device_id, secret, upstream)
+                run_connection(worker_url, device_id, secret, upstream, farm)
                 delay = 1.0
             except KeyboardInterrupt:
                 raise
