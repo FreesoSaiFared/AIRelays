@@ -33,12 +33,14 @@ if ($NodeMajor -lt 22) { throw "Node.js 22+ required; found $VersionText" }
 
 if ($UpdateFromMain) {
     $Git = (Get-Command git.exe -ErrorAction Stop).Source
+    $GitPrefix = @('-c',("safe.directory={0}" -f $RepoRoot))
     Push-Location $RepoRoot
     try {
-        Invoke-Checked $Git @('fetch','origin','main')
-        $Branch = (& $Git branch --show-current).Trim()
+        Invoke-Checked $Git ($GitPrefix + @('fetch','origin','main'))
+        $Branch = (& $Git @GitPrefix branch --show-current).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "git branch --show-current failed with exit code $LASTEXITCODE" }
         if ($Branch -ne 'main') { throw "Refusing to update non-main branch '$Branch'. Switch to main or omit -UpdateFromMain." }
-        Invoke-Checked $Git @('merge','--ff-only','origin/main')
+        Invoke-Checked $Git ($GitPrefix + @('merge','--ff-only','origin/main'))
     } finally { Pop-Location }
 }
 

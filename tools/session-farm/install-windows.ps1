@@ -2,6 +2,7 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")),
     [string]$ConfigPath = "$env:LOCALAPPDATA\AIRelays\session-farm\session-farm.config.json",
     [string]$TaskName = "AIRelays-SessionFarm",
+    [string]$RunAsUser = "",
     [switch]$StartNow
 )
 
@@ -18,6 +19,18 @@ if (-not (Test-Path $ExampleConfig)) {
     throw "example config not found: $ExampleConfig"
 }
 
+if (-not $RunAsUser) {
+    $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if ($Identity -match '\\SYSTEM$') {
+        $RunAsUser = [string](Get-CimInstance Win32_ComputerSystem).UserName
+        if (-not $RunAsUser) {
+            throw "Session Farm deployment is running as SYSTEM but no interactive Windows user is logged in. Log in to the Brave desktop account or pass -RunAsUser explicitly."
+        }
+    } else {
+        $RunAsUser = $Identity
+    }
+}
+
 $ConfigDir = Split-Path -Parent $ConfigPath
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 if (-not (Test-Path $ConfigPath)) {
@@ -26,9 +39,17 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Host "Edit orchestrator.urlIncludes before relying on autonomous continuation."
 }
 
+# The durable Windows MCP relay normally runs as SYSTEM while the Session Farm
+# must run in the logged-in Brave desktop account. If SYSTEM created a ProgramData
+# config/state directory, explicitly grant the interactive principal Modify rights.
+& icacls.exe $ConfigDir /grant "${RunAsUser}:(OI)(CI)M" /T /C | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to grant Session Farm config/state access to $RunAsUser (icacls exit $LASTEXITCODE)."
+}
+
 $Arguments = '"{0}" --config "{1}"' -f $FarmScript, $ConfigPath
 $Action = New-ScheduledTaskAction -Execute $Node -Argument $Arguments -WorkingDirectory $RepoRoot
-$Trigger = New-ScheduledTaskTrigger -AtLogOn
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $RunAsUser
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -38,7 +59,7 @@ $Settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+$Principal = New-ScheduledTaskPrincipal -UserId $RunAsUser -LogonType Interactive -RunLevel Highest
 $Task = New-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "External six-worker ChatGPT continuation farm with one orchestrator; browser-extension-free continuation."
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 
@@ -54,6 +75,7 @@ $Info = Get-ScheduledTaskInfo -TaskName $TaskName
     node = $Node
     farmScript = $FarmScript
     configPath = $ConfigPath
+    runAsUser = $RunAsUser
     state = $TaskInfo.State.ToString()
     lastRunTime = $Info.LastRunTime
     lastTaskResult = $Info.LastTaskResult

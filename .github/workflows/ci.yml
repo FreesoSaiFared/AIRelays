@@ -100,6 +100,36 @@ jobs:
           if ($json.node -notmatch '^v22\.') { throw "unexpected Node version: $($json.node)" }
           if (-not $json.validation.tests) { throw 'state-machine tests did not report success' }
 
+  transductive-windows-mcp-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify combined 155-tool MCP contract
+        run: node templates/transductive-windows-mcp/tests/template-smoke.mjs
+
+      - name: Run focused Session Farm security regression
+        run: node templates/transductive-windows-mcp/tests/security-regression.mjs
+
+      - name: Byte-compile resident Windows relay
+        run: python -m compileall templates/transductive-windows-mcp/windows-agent/transductive_agent
+
+      - name: Run resident Session Farm bridge tests
+        env:
+          PYTHONPATH: templates/transductive-windows-mcp/windows-agent
+        run: python -m unittest discover -s templates/transductive-windows-mcp/windows-agent/tests -v
+
   build:
     runs-on: ubuntu-latest
     steps:

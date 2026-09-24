@@ -1,8 +1,12 @@
 import { getToolSurface } from './tools.compact.mjs';
+import { SESSION_FARM_TOOLS } from './session-farm-tools.mjs';
 
 export const MODERN_PROTOCOL = '2026-07-28';
 export const LEGACY_PROTOCOL = '2025-11-25';
 export const WINDOWS_SCOPES = ['windows.read', 'windows.write', 'windows.admin'] as const;
+export const UPSTREAM_TOOL_COUNT = 144;
+export const SESSION_FARM_TOOL_COUNT = SESSION_FARM_TOOLS.length;
+export const TOTAL_TOOL_COUNT = UPSTREAM_TOOL_COUNT + SESSION_FARM_TOOL_COUNT;
 
 export type DispatchTool = (name: string, args: Record<string, unknown>, request: Request) => Promise<unknown>;
 export type McpAuthorization = {
@@ -34,7 +38,7 @@ function error(
 
 function validateModernHeaders(request: Request, body: any): Response | null {
   const version = request.headers.get('MCP-Protocol-Version');
-  if (version !== MODERN_PROTOCOL) return null; // legacy or negotiation probe
+  if (version !== MODERN_PROTOCOL) return null;
   const hm = request.headers.get('Mcp-Method');
   if (!hm || hm !== body.method) {
     return error(body.id ?? null, -32020, 'HeaderMismatch: Mcp-Method', undefined, 400);
@@ -95,7 +99,8 @@ export async function handleMcp(
     return error(null, -32700, 'Parse error', undefined, 400);
   }
 
-  const TOOL_SURFACE = await getToolSurface();
+  const upstream = await getToolSurface();
+  const tools = [...upstream.tools, ...SESSION_FARM_TOOLS];
 
   const mismatch = validateModernHeaders(request, body);
   if (mismatch) return mismatch;
@@ -105,7 +110,7 @@ export async function handleMcp(
   if (method === 'server/discover') {
     return result(id, {
       protocolVersion: MODERN_PROTOCOL,
-      serverInfo: { name: 'transductive-winrdp-worker', version: '0.1.0' },
+      serverInfo: { name: 'transductive-windows-worker', version: '0.2.0' },
       capabilities: { tools: { listChanged: false } },
     });
   }
@@ -113,9 +118,9 @@ export async function handleMcp(
   if (method === 'initialize') {
     return result(id, {
       protocolVersion: body?.params?.protocolVersion || LEGACY_PROTOCOL,
-      serverInfo: { name: 'transductive-winrdp-worker', version: '0.1.0' },
+      serverInfo: { name: 'transductive-windows-worker', version: '0.2.0' },
       capabilities: { tools: { listChanged: false } },
-      instructions: 'User-owned Windows control plane. Tool calls execute on the paired Windows device.',
+      instructions: 'User-owned Windows control plane. The paired resident relay exposes the generated Windows tool surface plus fixed-function AIRelays Session Farm controls.',
     });
   }
 
@@ -123,7 +128,7 @@ export async function handleMcp(
 
   if (method === 'tools/list') {
     return result(id, {
-      tools: TOOL_SURFACE.tools.map((t: any) => ({
+      tools: tools.map((t: any) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,
@@ -138,7 +143,7 @@ export async function handleMcp(
   if (method === 'tools/call') {
     const name = body?.params?.name;
     const args = body?.params?.arguments || {};
-    const def = (TOOL_SURFACE.tools as readonly any[]).find(t => t.name === name);
+    const def = (tools as readonly any[]).find(t => t.name === name);
     if (!def) return error(id, -32602, `Unknown tool: ${name}`, undefined, 404);
 
     const requiredScope = requiredScopeForTool(def);

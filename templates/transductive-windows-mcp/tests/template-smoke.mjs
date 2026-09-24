@@ -5,6 +5,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 const wrangler = JSON.parse(fs.readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
 const oauth = fs.readFileSync(new URL('../src/oauth-entry.ts', import.meta.url), 'utf8');
 const { getToolSurface } = await import('../src/tools.compact.mjs');
+const { SESSION_FARM_TOOLS } = await import('../src/session-farm-tools.mjs');
 const tools = await getToolSurface();
 
 assert.equal(pkg.dependencies['@cloudflare/workers-oauth-provider'], '1.0.0');
@@ -13,10 +14,18 @@ assert.ok(wrangler.compatibility_flags.includes('global_fetch_strictly_public'))
 assert.ok(wrangler.kv_namespaces.some((x) => x.binding === 'OAUTH_KV'));
 assert.equal(tools.count, 144);
 assert.equal(tools.tools.length, 144);
+assert.equal(SESSION_FARM_TOOLS.length, 11);
+assert.equal(new Set(SESSION_FARM_TOOLS.map((x) => x.name)).size, 11);
+const upstreamNames = new Set(tools.tools.map((x) => x.name));
+for (const tool of SESSION_FARM_TOOLS) assert.equal(upstreamNames.has(tool.name), false, `duplicate tool name: ${tool.name}`);
+assert.equal(tools.tools.length + SESSION_FARM_TOOLS.length, 155);
+assert.ok(SESSION_FARM_TOOLS.find((x) => x.name === 'farm_status')?.annotations?.readOnlyHint);
+assert.ok(SESSION_FARM_TOOLS.find((x) => x.name === 'farm_deploy')?.annotations?.destructiveHint);
+assert.ok(SESSION_FARM_TOOLS.find((x) => x.name === 'farm_guard')?.annotations?.destructiveHint);
 assert.match(oauth, /const resource = `\$\{origin\}\/mcp`/);
 assert.match(oauth, /resourceMetadata:\s*\{[\s\S]*?resource,[\s\S]*?authorization_servers:\s*\[origin\]/);
 assert.match(oauth, /clientIdMetadataDocumentEnabled:\s*true/);
 assert.match(oauth, /allowPlainPKCE:\s*false/);
 assert.match(oauth, /allowImplicitFlow:\s*false/);
 assert.match(oauth, /constantTimeEqual\(supplied, env\.OWNER_SETUP_TOKEN\)/);
-console.log('TRANSDUCTIVE_TEMPLATE_SMOKE_OK provider=1.0.0 resource_bound=pass tools=144');
+console.log('TRANSDUCTIVE_TEMPLATE_SMOKE_OK provider=1.0.0 resource_bound=pass upstream_tools=144 session_farm_tools=11 total_tools=155');
