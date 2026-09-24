@@ -60,6 +60,46 @@ jobs:
           node --check tools/session-farm/session-farm-mcp.mjs
           node --check tools/session-farm/session-farm-http-mcp.mjs
 
+  session-farm-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Parse Windows session-farm PowerShell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'tools/session-farm/deploy-windows.ps1',
+            'tools/session-farm/install-windows.ps1',
+            'tools/session-farm/activate-cua.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count) {
+              $errors | ForEach-Object { Write-Error "$file: $($_.Message)" }
+              throw "PowerShell parse failed: $file"
+            }
+          }
+
+      - name: Run canonical Windows deployment validation
+        shell: powershell
+        run: |
+          $receipt = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/session-farm/deploy-windows.ps1 -RepoRoot $PWD -ValidationOnly
+          $receipt
+          $json = $receipt | ConvertFrom-Json
+          if (-not $json.ok -or -not $json.validationOnly) { throw 'validation receipt was not successful' }
+          if ($json.node -notmatch '^v22\.') { throw "unexpected Node version: $($json.node)" }
+          if (-not $json.validation.tests) { throw 'state-machine tests did not report success' }
+
   build:
     runs-on: ubuntu-latest
     steps:
