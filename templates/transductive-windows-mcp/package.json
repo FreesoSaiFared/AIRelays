@@ -1,0 +1,26 @@
+{
+  "name": "transductive-windows-mcp-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/template-smoke.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.115.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "OWNER_PRINCIPAL_ID": {
+        "description": "Your Transductive cryptographic principal, e.g. tid:... . The Worker refuses OAuth grants while this remains tid:replace-me."
+      },
+      "OWNER_SETUP_TOKEN": {
+        "description": "Generate a long random owner setup secret. It is entered only on this Worker during explicit OAuth consent."
+      }
+    }
+  }
+}
