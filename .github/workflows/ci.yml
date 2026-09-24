@@ -119,6 +119,9 @@ jobs:
       - name: Verify combined 155-tool MCP contract
         run: node templates/transductive-windows-mcp/tests/template-smoke.mjs
 
+      - name: Run focused Session Farm security regression
+        run: node templates/transductive-windows-mcp/tests/security-regression.mjs
+
       - name: Byte-compile resident Windows relay
         run: python -m compileall templates/transductive-windows-mcp/windows-agent/transductive_agent
 
