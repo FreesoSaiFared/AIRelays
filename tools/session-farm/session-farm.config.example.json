@@ -1,0 +1,58 @@
+{
+  "protocol": "AIR_SESSION_FARM_CONFIG/1",
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 39817
+  },
+  "cdp": {
+    "http": "http://127.0.0.1:9333"
+  },
+  "continuation": {
+    "prompt": "continue",
+    "marker": "[[TF_CONTINUE_NOW/1]]",
+    "requireMarker": true,
+    "tickMs": 2000,
+    "cooldownMs": 5000,
+    "maxPerHourPerSession": 90
+  },
+  "orchestration": {
+    "heartbeatMs": 120000,
+    "tailCharsPerWorker": 1400,
+    "controlMarker": "[[FARM_CONTROL/1]]"
+  },
+  "activation": {
+    "command": [],
+    "timeoutMs": 8000
+  },
+  "guard": {
+    "enabled": true,
+    "intervalMs": 5000,
+    "denyCommandlineRegex": [
+      "chrome-browser-mcp",
+      "cua-automation",
+      "page-agent-chatgpt-profile"
+    ],
+    "protectCommandlineRegex": [
+      "session-farm",
+      "cua-driver",
+      "brave.exe",
+      "airelays"
+    ]
+  },
+  "browser": {
+    "chatUrlRegex": "^https://chatgpt\\.com/(c/|g/|$)",
+    "autoAssignUnboundWorkers": true
+  },
+  "workers": [
+    {"id": "w1", "urlIncludes": ""},
+    {"id": "w2", "urlIncludes": ""},
+    {"id": "w3", "urlIncludes": ""},
+    {"id": "w4", "urlIncludes": ""},
+    {"id": "w5", "urlIncludes": ""},
+    {"id": "w6", "urlIncludes": ""}
+  ],
+  "orchestrator": {
+    "id": "orch",
+    "urlIncludes": "REPLACE_WITH_ORCHESTRATOR_CHAT_URL_FRAGMENT"
+  }
+}
