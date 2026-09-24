@@ -9,7 +9,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "AIR_SESSION_FARM_STATE/1";
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const DEFAULT_CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), "session-farm.config.json");
 
 export function hashText(text = "") {
@@ -35,22 +35,38 @@ async function readJson(file, fallback) {
   catch (error) { if (error?.code === "ENOENT") return clone(fallback); throw error; }
 }
 
-function chatRegex(config) {
-  try { return new RegExp(config.browser?.chatUrlRegex || "^https://chatgpt\\.com/"); }
+function browserChatRegex(browserConfig = {}) {
+  try { return new RegExp(browserConfig.chatUrlRegex || "^https://chatgpt\\.com/"); }
   catch { return /^https:\/\/chatgpt\.com\//; }
 }
 
+function chatRegex(config) {
+  return browserChatRegex(config.browser || {});
+}
+
+function isAllowedChatUrl(url, browserConfig = {}) {
+  const value = String(url || "").trim();
+  return /^https?:\/\//i.test(value) && browserChatRegex(browserConfig).test(value);
+}
+
 export function slotLaunchUrl(slotConfig = {}, slotState = {}, browserConfig = {}) {
-  const candidates = [
-    slotConfig.launchUrl,
-    /^https?:\/\//i.test(String(slotState.boundUrl || "")) ? slotState.boundUrl : "",
-    /^https?:\/\//i.test(String(slotConfig.urlIncludes || "")) ? slotConfig.urlIncludes : "",
-    browserConfig.newTabUrl,
-    "https://chatgpt.com/",
-  ];
-  const value = String(candidates.find((candidate) => String(candidate || "").trim()) || "").trim();
-  if (!/^https?:\/\//i.test(value)) throw new Error(`invalid launch URL: ${value}`);
+  const explicit = String(slotConfig.launchUrl || "").trim();
+  if (explicit) {
+    if (!isAllowedChatUrl(explicit, browserConfig)) throw new Error(`invalid ChatGPT launch URL: ${explicit}`);
+    return explicit;
+  }
+  const candidates = [slotState.boundUrl, slotConfig.urlIncludes, browserConfig.newTabUrl, "https://chatgpt.com/"];
+  const value = candidates.map((candidate) => String(candidate || "").trim()).find((candidate) => isAllowedChatUrl(candidate, browserConfig));
+  if (!value) throw new Error("no valid ChatGPT launch URL is configured");
   return value;
+}
+
+export function spawnClaimState(spawnTargetId, spawnRequestedAt, targetExists, nowMs = Date.now(), graceMs = 15000) {
+  if (!spawnTargetId || !spawnRequestedAt) return "none";
+  if (targetExists) return "target-live";
+  const age = nowMs - Date.parse(spawnRequestedAt);
+  if (Number.isFinite(age) && age >= 0 && age <= graceMs) return "awaiting-list";
+  return "expired";
 }
 
 export function validateConfig(config) {
@@ -381,14 +397,20 @@ class SessionFarm {
 
   _pendingSpawnTarget(targets, slot) {
     if (!slot.spawnTargetId || !slot.spawnRequestedAt) return null;
-    const age = Date.now() - Date.parse(slot.spawnRequestedAt);
-    const graceMs = Number(this.config.browser?.spawnGraceMs || 15000);
-    if (!Number.isFinite(age) || age > graceMs) {
+    const target = targets.find((candidate) => candidate.id === slot.spawnTargetId) || null;
+    const state = spawnClaimState(
+      slot.spawnTargetId,
+      slot.spawnRequestedAt,
+      Boolean(target),
+      Date.now(),
+      Number(this.config.browser?.spawnGraceMs || 15000),
+    );
+    if (state === "target-live") return target;
+    if (state === "expired") {
       slot.spawnTargetId = null;
       slot.spawnRequestedAt = null;
-      return null;
     }
-    return targets.find((target) => target.id === slot.spawnTargetId) || null;
+    return null;
   }
 
   _bindTarget(slot, target, claimed, status = null) {
@@ -455,12 +477,18 @@ class SessionFarm {
         existing.push({ slot: slot.id, targetId: slot.targetId });
         continue;
       }
-      if (this._pendingSpawnTarget([...this.targetsById.values()], slot)) {
-        existing.push({ slot: slot.id, targetId: slot.spawnTargetId, pending: true });
+      const pending = this._pendingSpawnTarget([...this.targetsById.values()], slot);
+      if (pending) {
+        existing.push({ slot: slot.id, targetId: pending.id, pending: true, listed: true });
         continue;
       }
-      const launchUrl = slotLaunchUrl(cfg, slot, this.config.browser || {});
+      if (slot.spawnTargetId && slot.spawnRequestedAt) {
+        existing.push({ slot: slot.id, targetId: slot.spawnTargetId, pending: true, listed: false });
+        continue;
+      }
+      let launchUrl;
       try {
+        launchUrl = slotLaunchUrl(cfg, slot, this.config.browser || {});
         const target = await this.cdp.createTarget(launchUrl);
         slot.spawnTargetId = target.id;
         slot.spawnRequestedAt = nowIso();
@@ -474,7 +502,7 @@ class SessionFarm {
         created.push({ slot: slot.id, role: slot.role, targetId: target.id, launchUrl });
         await sleep(Number(this.config.browser?.spawnSpacingMs || 250));
       } catch (error) {
-        const failure = { slot: slot.id, role: slot.role, error: String(error?.message || error), launchUrl };
+        const failure = { slot: slot.id, role: slot.role, error: String(error?.message || error), launchUrl: launchUrl || null };
         failures.push(failure);
         this.event("tab-spawn-failed", failure);
       }
