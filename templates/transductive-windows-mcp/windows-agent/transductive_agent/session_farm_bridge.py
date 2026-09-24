@@ -67,7 +67,8 @@ class SessionFarmBridge:
         raw = args.get("configPath") or settings.get("configPath") or self.device_config.get("sessionFarmConfigPath") or os.environ.get("AIRELAYS_SESSION_FARM_CONFIG")
         if raw:
             return Path(str(raw)).expanduser().resolve()
-        local = os.environ.get("LOCALAPPDATA")
+        running_as_system = str(os.environ.get("USERNAME") or "").upper() == "SYSTEM"
+        local = None if running_as_system else os.environ.get("LOCALAPPDATA")
         if not local:
             local = str(_program_data() / "Transductive" / "WindowsMCP")
         return (Path(local) / "AIRelays" / "session-farm" / "session-farm.config.json").resolve()
@@ -169,7 +170,8 @@ class SessionFarmBridge:
             cmd.append("-EnableSelfHealing")
         if bool(args.get("startNow", True)):
             cmd.append("-StartNow")
-        if bool(args.get("validationOnly", False)):
+        validation_only = bool(args.get("validationOnly", False))
+        if validation_only:
             cmd.append("-ValidationOnly")
         completed = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         receipt = {
@@ -182,7 +184,8 @@ class SessionFarmBridge:
         }
         if completed.returncode != 0:
             raise RuntimeError(json.dumps(receipt, ensure_ascii=False))
-        self._remember(root, config_path)
+        if not validation_only:
+            self._remember(root, config_path)
         return receipt
 
     @staticmethod
