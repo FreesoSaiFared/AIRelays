@@ -186,6 +186,19 @@ node tools\session-farm\session-farm.mjs `
 
 A successful one-shot tick is the first acceptance check. It should report tab bindings, any tab-spawn receipts, and probe states without submitting duplicate continuations.
 
+## One-command Windows deployment
+
+For the normal self-healing setup, the repository now includes a deployment wrapper that verifies Node.js 22+, runs syntax checks and state-machine tests, creates or preserves the local config, optionally enables seven-tab self-healing, installs the persistent scheduled task, starts it, and returns a compact health/status receipt.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\session-farm\deploy-windows.ps1 `
+  -UpdateFromMain `
+  -EnableSelfHealing `
+  -StartNow
+```
+
+The updater is intentionally fail-closed: `-UpdateFromMain` only fast-forwards a checkout already on `main`; it will not rewrite a divergent or feature branch. Existing local session bindings/config are preserved.
+
 ## Install as a persistent Windows process
 
 ```powershell
