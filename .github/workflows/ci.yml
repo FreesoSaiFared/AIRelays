@@ -59,6 +59,7 @@ jobs:
           node --check tools/session-farm/session-farm.mjs
           node --check tools/session-farm/session-farm-mcp.mjs
           node --check tools/session-farm/session-farm-http-mcp.mjs
+          node --check tools/session-farm/seed-session.mjs
 
   session-farm-windows:
     runs-on: windows-latest
@@ -117,7 +118,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify combined 155-tool MCP contract
+      - name: Verify combined 156-tool MCP contract
         run: node templates/transductive-windows-mcp/tests/template-smoke.mjs
 
       - name: Run focused Session Farm security regression
