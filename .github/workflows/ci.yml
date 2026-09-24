@@ -71,14 +71,15 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Parse Windows session-farm PowerShell
+      - name: Parse Windows control PowerShell
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $files = @(
             'tools/session-farm/deploy-windows.ps1',
             'tools/session-farm/install-windows.ps1',
-            'tools/session-farm/activate-cua.ps1'
+            'tools/session-farm/activate-cua.ps1',
+            'templates/transductive-windows-mcp/upgrade-existing.ps1'
           )
           foreach ($file in $files) {
             $tokens = $null
