@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "transductive-windows-mcp",
+  "main": "src/oauth-entry.ts",
+  "compatibility_date": "2026-09-24",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "DEVICE_HUB", "class_name": "DeviceHub" },
+      { "name": "PAIRING_HUB", "class_name": "PairingHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DeviceHub", "PairingHub"] }
+  ],
+  "vars": {
+    "OWNER_PRINCIPAL_ID": "tid:replace-me"
+  },
+  "secrets": {
+    "required": ["OWNER_SETUP_TOKEN"]
+  }
+}

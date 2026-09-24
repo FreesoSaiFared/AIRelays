@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "transductive-windows-mcp-agent"
+version = "0.1.0"
+description = "Outbound Windows relay for a user-owned Transductive Cloudflare MCP Worker"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "websockets>=16,<17",
+  "winrdp-mcp[agent-ui]==0.1.5",
+]
+
+[project.scripts]
+transductive-windows-mcp = "transductive_agent.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["transductive_agent"]
