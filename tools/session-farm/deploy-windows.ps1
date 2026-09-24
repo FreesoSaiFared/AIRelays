@@ -4,7 +4,8 @@ param(
     [switch]$UpdateFromMain,
     [switch]$EnableSelfHealing,
     [switch]$StartNow,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$ValidationOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,11 +42,29 @@ if ($UpdateFromMain) {
     } finally { Pop-Location }
 }
 
+$Validation = [ordered]@{
+    syntax = [ordered]@{}
+    tests = $null
+}
+
 if (-not $SkipTests) {
-    Invoke-Checked $Node @('--check',(Join-Path $SessionFarm 'session-farm.mjs'))
-    Invoke-Checked $Node @('--check',(Join-Path $SessionFarm 'session-farm-mcp.mjs'))
-    Invoke-Checked $Node @('--check',(Join-Path $SessionFarm 'session-farm-http-mcp.mjs'))
+    foreach ($Entry in @('session-farm.mjs','session-farm-mcp.mjs','session-farm-http-mcp.mjs')) {
+        Invoke-Checked $Node @('--check',(Join-Path $SessionFarm $Entry))
+        $Validation.syntax[$Entry] = $true
+    }
     Invoke-Checked $Node @('--test',(Join-Path $SessionFarm 'session-farm.test.mjs'))
+    $Validation.tests = $true
+}
+
+if ($ValidationOnly) {
+    [pscustomobject]@{
+        ok = $true
+        validationOnly = $true
+        repoRoot = $RepoRoot
+        node = $VersionText
+        validation = $Validation
+    } | ConvertTo-Json -Depth 20
+    return
 }
 
 $ConfigDir = Split-Path -Parent $ConfigPath
@@ -84,8 +103,10 @@ if ($Health -and $Health.ok) {
 
 [pscustomobject]@{
     ok = [bool]($Health -and $Health.ok)
+    validationOnly = $false
     repoRoot = $RepoRoot
     node = $VersionText
+    validation = $Validation
     configPath = $ConfigPath
     selfHealing = [bool]$Config.browser.ensureTabs
     daemonOrigin = $DaemonOrigin
