@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 FARM_TOOLS = {
-    "farm_deploy", "farm_start", "farm_status", "farm_tick", "farm_ensure_tabs",
+    "farm_deploy", "farm_start", "farm_status", "farm_tick", "farm_ensure_tabs", "farm_seed",
     "farm_continue", "farm_pause", "farm_resume", "farm_bind", "farm_guard", "farm_stop",
 }
 WORKERS = {f"w{i}" for i in range(1, 7)}
@@ -26,7 +26,7 @@ class SessionFarmBridge:
     """Fixed-function bridge from the durable Windows relay into AIRelays Session Farm.
 
     This deliberately does not expose a generic shell. Process launch is limited to
-    the canonical deployer and the already-installed AIRelays-SessionFarm task.
+    canonical AIRelays Session Farm helpers and the already-installed farm task.
     """
 
     def __init__(self, device_config: dict[str, Any]) -> None:
@@ -123,6 +123,12 @@ class SessionFarmBridge:
             raise RuntimeError("powershell.exe was not found")
         return value
 
+    def _node(self) -> str:
+        value = shutil.which("node.exe") or shutil.which("node")
+        if not value:
+            raise RuntimeError("Node.js 22+ was not found on PATH")
+        return value
+
     def _start(self, config_path: Path) -> dict[str, Any]:
         if self._healthy(config_path):
             return {"ok": True, "alreadyRunning": True, "configPath": str(config_path)}
@@ -188,6 +194,46 @@ class SessionFarmBridge:
             self._remember(root, config_path)
         return receipt
 
+    def _seed(self, args: dict[str, Any], config_path: Path) -> dict[str, Any]:
+        root = self._repo_root(args, required=True)
+        assert root is not None
+        slot = str(args.get("slot") or "")
+        if slot not in SLOTS:
+            raise RuntimeError("slot must be w1..w6 or orch")
+        prompt = str(args.get("prompt") or "").strip()
+        if not prompt:
+            raise RuntimeError("bootstrap prompt is empty")
+        if len(prompt.encode("utf-8")) > 100_000:
+            raise RuntimeError("bootstrap prompt exceeds 100000 bytes")
+        script = root / "tools" / "session-farm" / "seed-session.mjs"
+        if not script.is_file():
+            raise RuntimeError(f"canonical session seeder missing: {script}")
+        cmd = [self._node(), str(script), "--config", str(config_path), "--slot", slot]
+        if bool(args.get("force", False)):
+            cmd.append("--force")
+        completed = subprocess.run(
+            cmd,
+            cwd=str(root),
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        if completed.returncode != 0:
+            raise RuntimeError(f"farm_seed failed: {stderr[-8000:] or stdout[-8000:]}")
+        try:
+            receipt = json.loads(stdout.splitlines()[-1])
+        except (json.JSONDecodeError, IndexError) as exc:
+            raise RuntimeError(f"farm_seed returned invalid receipt: {stdout[-8000:]}") from exc
+        if not receipt.get("ok"):
+            raise RuntimeError(f"farm_seed returned failure: {receipt}")
+        self._remember(root, config_path)
+        return receipt
+
     @staticmethod
     def _worker(args: dict[str, Any]) -> str:
         value = str(args.get("worker") or "")
@@ -214,6 +260,8 @@ class SessionFarmBridge:
             return self._http(config_path, "/tick", body={})
         if name == "farm_ensure_tabs":
             return self._http(config_path, "/ensure-tabs", body={})
+        if name == "farm_seed":
+            return self._seed(args, config_path)
         if name == "farm_continue":
             body: dict[str, Any] = {"worker": self._worker(args)}
             if "prompt" in args and args["prompt"] is not None:

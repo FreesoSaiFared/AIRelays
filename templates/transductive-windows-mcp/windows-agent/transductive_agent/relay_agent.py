@@ -99,7 +99,7 @@ def run_forever(config: dict[str, Any]) -> None:
     farm = SessionFarmBridge(config)
     with StdioMcpClient(command, request_timeout=float(config.get("toolTimeoutSeconds", 120))) as upstream:
         tools = upstream.list_tools()
-        LOG.info("upstream ready tools=%d local_session_farm_tools=11", len(tools))
+        LOG.info("upstream ready tools=%d local_session_farm_tools=12", len(tools))
         while True:
             try:
                 run_connection(worker_url, device_id, secret, upstream, farm)

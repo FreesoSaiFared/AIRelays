@@ -49,6 +49,18 @@ export const SESSION_FARM_TOOLS = [
     annotations: {},
   },
   {
+    name: 'farm_seed',
+    description: 'Seed the first user turn into a ready worker or orchestrator slot. By default this is one-shot and skips any conversation that already contains a user turn.',
+    inputSchema: objectSchema({
+      repoRoot,
+      configPath,
+      slot,
+      prompt: { type: 'string', minLength: 1, maxLength: 100000 },
+      force: { type: 'boolean', default: false, description: 'Allow seeding even when the target already contains a user turn. Normally leave false.' },
+    }, ['slot', 'prompt']),
+    annotations: {},
+  },
+  {
     name: 'farm_continue',
     description: 'Submit one verified continuation to a ready worker. Prompt defaults to the farm generic continuation prompt.',
     inputSchema: objectSchema({ configPath, worker, prompt: { type: 'string' } }, ['worker']),
