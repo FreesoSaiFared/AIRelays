@@ -9,7 +9,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "AIR_SESSION_FARM_STATE/1";
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const DEFAULT_CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), "session-farm.config.json");
 
 export function hashText(text = "") {
@@ -47,6 +47,17 @@ function chatRegex(config) {
 function isAllowedChatUrl(url, browserConfig = {}) {
   const value = String(url || "").trim();
   return /^https?:\/\//i.test(value) && browserChatRegex(browserConfig).test(value);
+}
+
+function isSpecificChatUrl(url, browserConfig = {}) {
+  const value = String(url || "").trim();
+  if (!isAllowedChatUrl(value, browserConfig)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.pathname !== "/" && parsed.pathname !== "";
+  } catch {
+    return false;
+  }
 }
 
 export function slotLaunchUrl(slotConfig = {}, slotState = {}, browserConfig = {}) {
@@ -91,7 +102,8 @@ function commonSlotState(cfg, role) {
     id: cfg.id,
     role,
     paused: false,
-    boundUrl: cfg.urlIncludes || "",
+    boundUrl: cfg.launchUrl || cfg.urlIncludes || "",
+    observedUrl: "",
     targetId: null,
     title: "",
     status: "unbound",
@@ -314,6 +326,7 @@ class SessionFarm {
     this.cdp = new CdpClient(config.cdp.http);
     this.targetsById = new Map();
     this.slotLocks = new Map();
+    this.ensureTabsTail = Promise.resolve();
     this.tickInFlight = false;
     this.stopping = false;
     this.lastGuardMs = 0;
@@ -369,8 +382,23 @@ class SessionFarm {
     finally { release(); if (this.slotLocks.get(id) === tailPromise) this.slotLocks.delete(id); }
   }
 
+  async withEnsureTabsLock(fn) {
+    const previous = this.ensureTabsTail;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const tailPromise = previous.then(() => gate);
+    this.ensureTabsTail = tailPromise;
+    await previous;
+    try { return await fn(); }
+    finally {
+      release();
+      if (this.ensureTabsTail === tailPromise) this.ensureTabsTail = Promise.resolve();
+    }
+  }
+
   clearObserved(slot, status = "missing") {
     slot.targetId = null;
+    slot.observedUrl = "";
     slot.status = status;
     slot.ready = false;
     slot.busy = false;
@@ -384,6 +412,14 @@ class SessionFarm {
   _chatTargets(targets) {
     const regex = chatRegex(this.config);
     return targets.filter((t) => regex.test(String(t.url || "")));
+  }
+
+  _rememberChatUrl(slot, candidate) {
+    const value = String(candidate || "").trim();
+    if (!isAllowedChatUrl(value, this.config.browser || {})) return false;
+    const currentSpecific = isSpecificChatUrl(slot.boundUrl, this.config.browser || {});
+    if (isSpecificChatUrl(value, this.config.browser || {}) || !currentSpecific) slot.boundUrl = value;
+    return true;
   }
 
   _matchTarget(targets, cfg, slot) {
@@ -415,7 +451,8 @@ class SessionFarm {
 
   _bindTarget(slot, target, claimed, status = null) {
     slot.targetId = target.id;
-    slot.boundUrl = target.url || slot.boundUrl;
+    slot.observedUrl = target.url || "";
+    this._rememberChatUrl(slot, target.url);
     slot.title = target.title || "";
     if (status) slot.status = status;
     claimed.add(target.id);
@@ -462,7 +499,11 @@ class SessionFarm {
     }
   }
 
-  async ensureTabs({ force = false } = {}) {
+  async ensureTabs(options = {}) {
+    return this.withEnsureTabsLock(() => this._ensureTabs(options));
+  }
+
+  async _ensureTabs({ force = false } = {}) {
     if (!force && !this.config.browser?.ensureTabs) return { ok: true, skipped: true, reason: "disabled", created: [] };
     const created = [];
     const existing = [];
@@ -494,7 +535,8 @@ class SessionFarm {
         slot.spawnRequestedAt = nowIso();
         slot.spawnCount = Number(slot.spawnCount || 0) + 1;
         slot.targetId = target.id;
-        slot.boundUrl = target.url || launchUrl;
+        slot.observedUrl = target.url || launchUrl;
+        this._rememberChatUrl(slot, target.url || launchUrl);
         slot.title = target.title || "";
         slot.status = "spawned";
         this.targetsById.set(target.id, target);
@@ -523,7 +565,9 @@ class SessionFarm {
       try {
         const p = await this.cdp.probe(target);
         slot.title = p?.title || target.title || "";
-        slot.boundUrl = p?.href || target.url || slot.boundUrl;
+        const observedUrl = p?.href || target.url || "";
+        slot.observedUrl = observedUrl;
+        const allowedChat = this._rememberChatUrl(slot, observedUrl);
         slot.busy = Boolean(p?.busy);
         slot.ready = Boolean(p?.ready);
         slot.status = slot.busy ? "busy" : slot.ready ? "ready" : "not-ready";
@@ -532,7 +576,9 @@ class SessionFarm {
         slot.markerPresent = slot.lastAssistant.includes(this.config.continuation.marker);
         slot.lastProbeAt = nowIso();
         slot.lastError = null;
-        if (chatRegex(this.config).test(slot.boundUrl)) {
+        const stableSpecific = isSpecificChatUrl(slot.boundUrl, this.config.browser || {});
+        const observedSpecific = isSpecificChatUrl(observedUrl, this.config.browser || {});
+        if (allowedChat && (!stableSpecific || observedSpecific)) {
           slot.spawnTargetId = null;
           slot.spawnRequestedAt = null;
         }
@@ -682,7 +728,7 @@ class SessionFarm {
   publicStatus(){
     const slots={};
     for(const[id,s]of Object.entries(this.state.slots))slots[id]={
-      id:s.id,role:s.role,paused:s.paused,boundUrl:s.boundUrl,targetId:s.targetId,title:s.title,status:s.status,
+      id:s.id,role:s.role,paused:s.paused,boundUrl:s.boundUrl,observedUrl:s.observedUrl||"",targetId:s.targetId,title:s.title,status:s.status,
       ready:s.ready,busy:s.busy,markerPresent:s.markerPresent,lastAssistantHash:s.lastAssistantHash,
       lastAssistantTail:tail(s.lastAssistant,1200),lastContinuationAt:s.lastContinuationAt||null,
       inFlightAssistantHash:s.inFlightAssistantHash||"",lastProbeAt:s.lastProbeAt,lastError:s.lastError,
@@ -700,6 +746,7 @@ class SessionFarm {
     const slot=this.state.slots[id];
     if(!slot)return{ok:false,error:"unknown-slot"};
     slot.boundUrl=String(url||"").trim();
+    slot.observedUrl="";
     slot.spawnTargetId=null;
     slot.spawnRequestedAt=null;
     this.clearObserved(slot,slot.boundUrl?"bound-awaiting-target":"unbound");
