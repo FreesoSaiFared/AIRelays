@@ -31,6 +31,12 @@ function isAuthorized(request: Request, env: Env): boolean {
   return request.headers.get('Authorization') === `Bearer ${env.MCP_BEARER_TOKEN}`;
 }
 
+function dispatchTimeoutMs(name: string): number {
+  if (name === 'farm_deploy') return 300_000;
+  if (name.startsWith('farm_')) return 60_000;
+  return 25_000;
+}
+
 export async function dispatchToDevice(env: Env, name: string, args: Record<string, unknown>, request: Request): Promise<unknown> {
   if (env.FIXTURE_DISPATCH) return env.FIXTURE_DISPATCH.dispatch(name, args);
   const deviceId = request.headers.get('X-Transductive-Device') || 'default';
@@ -39,7 +45,7 @@ export async function dispatchToDevice(env: Env, name: string, args: Record<stri
   const stub = env.DEVICE_HUB.get(id);
   const r = await stub.fetch('https://device-hub.internal/dispatch', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ deviceId, name, arguments: args }),
+    body: JSON.stringify({ deviceId, name, arguments: args, timeoutMs: dispatchTimeoutMs(name) }),
   });
   const data: any = await r.json();
   if (!r.ok || !data.ok) throw new Error(data.error || `DEVICE_DISPATCH_HTTP_${r.status}`);
