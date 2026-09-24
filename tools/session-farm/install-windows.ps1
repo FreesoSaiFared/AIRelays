@@ -39,6 +39,14 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Host "Edit orchestrator.urlIncludes before relying on autonomous continuation."
 }
 
+# The durable Windows MCP relay normally runs as SYSTEM while the Session Farm
+# must run in the logged-in Brave desktop account. If SYSTEM created a ProgramData
+# config/state directory, explicitly grant the interactive principal Modify rights.
+& icacls.exe $ConfigDir /grant "${RunAsUser}:(OI)(CI)M" /T /C | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to grant Session Farm config/state access to $RunAsUser (icacls exit $LASTEXITCODE)."
+}
+
 $Arguments = '"{0}" --config "{1}"' -f $FarmScript, $ConfigPath
 $Action = New-ScheduledTaskAction -Execute $Node -Argument $Arguments -WorkingDirectory $RepoRoot
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $RunAsUser
