@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractFarmControl, hashText, isEligibleContinuation, validateConfig } from "./session-farm.mjs";
+import { extractFarmControl, hashText, isEligibleContinuation, slotLaunchUrl, spawnClaimState, validateConfig } from "./session-farm.mjs";
 
 function policy(overrides = {}) {
   return {
@@ -39,6 +39,74 @@ test("requires exactly six workers", () => {
   };
   assert.equal(validateConfig(config), config);
   assert.throws(() => validateConfig({ ...config, workers: config.workers.slice(0, 5) }), /exactly six/);
+});
+
+test("slot launch URL prefers explicit launchUrl, then persisted conversation, then full urlIncludes", () => {
+  const browser = {
+    chatUrlRegex: "^https://chatgpt\\.com/(c/|g/|$)",
+    newTabUrl: "https://chatgpt.com/",
+  };
+  assert.equal(
+    slotLaunchUrl(
+      { launchUrl: "https://chatgpt.com/c/explicit", urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "https://chatgpt.com/c/state" },
+      browser,
+    ),
+    "https://chatgpt.com/c/explicit",
+  );
+  assert.equal(
+    slotLaunchUrl(
+      { urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "https://chatgpt.com/c/state" },
+      browser,
+    ),
+    "https://chatgpt.com/c/state",
+  );
+  assert.equal(
+    slotLaunchUrl(
+      { urlIncludes: "https://chatgpt.com/c/config" },
+      { boundUrl: "" },
+      browser,
+    ),
+    "https://chatgpt.com/c/config",
+  );
+});
+
+test("slot launch URL ignores a drifted persisted non-ChatGPT URL", () => {
+  assert.equal(
+    slotLaunchUrl(
+      {},
+      { boundUrl: "https://example.com/unrelated" },
+      { chatUrlRegex: "^https://chatgpt\\.com/(c/|g/|$)", newTabUrl: "https://chatgpt.com/" },
+    ),
+    "https://chatgpt.com/",
+  );
+});
+
+test("slot launch URL falls back to ChatGPT root", () => {
+  assert.equal(slotLaunchUrl({}, {}, {}), "https://chatgpt.com/");
+});
+
+test("slot launch URL rejects explicit non-ChatGPT destinations", () => {
+  assert.throws(
+    () => slotLaunchUrl({ launchUrl: "file:///tmp/nope" }, {}, { newTabUrl: "" }),
+    /invalid ChatGPT launch URL/,
+  );
+  assert.throws(
+    () => slotLaunchUrl({ launchUrl: "https://example.com/" }, {}, { newTabUrl: "https://chatgpt.com/" }),
+    /invalid ChatGPT launch URL/,
+  );
+});
+
+test("spawn claim remains attached to a live target even after the grace window", () => {
+  const started = new Date(1_000).toISOString();
+  assert.equal(spawnClaimState("target-1", started, true, 120_000, 15_000), "target-live");
+});
+
+test("missing spawned target is reserved during CDP-list lag then expires", () => {
+  const started = new Date(10_000).toISOString();
+  assert.equal(spawnClaimState("target-1", started, false, 20_000, 15_000), "awaiting-list");
+  assert.equal(spawnClaimState("target-1", started, false, 30_001, 15_000), "expired");
 });
 
 test("worker continuation is one-shot per assistant output", () => {

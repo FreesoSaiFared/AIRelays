@@ -9,7 +9,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PROTOCOL = "AIR_SESSION_FARM_STATE/1";
-const VERSION = "0.1.1";
+const VERSION = "0.2.3";
 const DEFAULT_CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), "session-farm.config.json");
 
 export function hashText(text = "") {
@@ -35,6 +35,51 @@ async function readJson(file, fallback) {
   catch (error) { if (error?.code === "ENOENT") return clone(fallback); throw error; }
 }
 
+function browserChatRegex(browserConfig = {}) {
+  try { return new RegExp(browserConfig.chatUrlRegex || "^https://chatgpt\\.com/"); }
+  catch { return /^https:\/\/chatgpt\.com\//; }
+}
+
+function chatRegex(config) {
+  return browserChatRegex(config.browser || {});
+}
+
+function isAllowedChatUrl(url, browserConfig = {}) {
+  const value = String(url || "").trim();
+  return /^https?:\/\//i.test(value) && browserChatRegex(browserConfig).test(value);
+}
+
+function isSpecificChatUrl(url, browserConfig = {}) {
+  const value = String(url || "").trim();
+  if (!isAllowedChatUrl(value, browserConfig)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.pathname !== "/" && parsed.pathname !== "";
+  } catch {
+    return false;
+  }
+}
+
+export function slotLaunchUrl(slotConfig = {}, slotState = {}, browserConfig = {}) {
+  const explicit = String(slotConfig.launchUrl || "").trim();
+  if (explicit) {
+    if (!isAllowedChatUrl(explicit, browserConfig)) throw new Error(`invalid ChatGPT launch URL: ${explicit}`);
+    return explicit;
+  }
+  const candidates = [slotState.boundUrl, slotConfig.urlIncludes, browserConfig.newTabUrl, "https://chatgpt.com/"];
+  const value = candidates.map((candidate) => String(candidate || "").trim()).find((candidate) => isAllowedChatUrl(candidate, browserConfig));
+  if (!value) throw new Error("no valid ChatGPT launch URL is configured");
+  return value;
+}
+
+export function spawnClaimState(spawnTargetId, spawnRequestedAt, targetExists, nowMs = Date.now(), graceMs = 15000) {
+  if (!spawnTargetId || !spawnRequestedAt) return "none";
+  if (targetExists) return "target-live";
+  const age = nowMs - Date.parse(spawnRequestedAt);
+  if (Number.isFinite(age) && age >= 0 && age <= graceMs) return "awaiting-list";
+  return "expired";
+}
+
 export function validateConfig(config) {
   if (!config || config.protocol !== "AIR_SESSION_FARM_CONFIG/1") throw new Error("config.protocol must be AIR_SESSION_FARM_CONFIG/1");
   if (!Array.isArray(config.workers) || config.workers.length !== 6) throw new Error("session farm requires exactly six worker slots");
@@ -52,23 +97,43 @@ export async function loadConfig(configPath = DEFAULT_CONFIG) {
   return validateConfig(JSON.parse(await fsp.readFile(configPath, "utf8")));
 }
 
+function commonSlotState(cfg, role) {
+  return {
+    id: cfg.id,
+    role,
+    paused: false,
+    boundUrl: cfg.launchUrl || cfg.urlIncludes || "",
+    observedUrl: "",
+    targetId: null,
+    title: "",
+    status: "unbound",
+    ready: false,
+    busy: false,
+    markerPresent: false,
+    lastAssistant: "",
+    lastAssistantHash: "",
+    lastProbeAt: null,
+    lastError: null,
+    spawnTargetId: null,
+    spawnRequestedAt: null,
+    spawnCount: 0,
+  };
+}
+
 function workerState(worker) {
   return {
-    id: worker.id, role: "worker", paused: false,
-    boundUrl: worker.urlIncludes || "", targetId: null, title: "", status: "unbound",
-    ready: false, busy: false, markerPresent: false,
-    lastAssistant: "", lastAssistantHash: "", lastProbeAt: null, lastError: null,
-    lastContinuationAssistantHash: "", lastContinuationAt: null, continuationTimes: [],
-    inFlightAssistantHash: "", inFlightStartedAt: null,
+    ...commonSlotState(worker, "worker"),
+    lastContinuationAssistantHash: "",
+    lastContinuationAt: null,
+    continuationTimes: [],
+    inFlightAssistantHash: "",
+    inFlightStartedAt: null,
   };
 }
 
 function orchestratorState(orch) {
   return {
-    id: orch.id, role: "orchestrator", paused: false,
-    boundUrl: orch.urlIncludes || "", targetId: null, title: "", status: "unbound",
-    ready: false, busy: false, markerPresent: false,
-    lastAssistant: "", lastAssistantHash: "", lastProbeAt: null, lastError: null,
+    ...commonSlotState(orch, "orchestrator"),
     lastControlAppliedHash: "",
     controlProgress: { hash: "", done: [] },
   };
@@ -78,9 +143,20 @@ function defaultState(config) {
   const slots = Object.fromEntries(config.workers.map((w) => [w.id, workerState(w)]));
   slots[config.orchestrator.id] = orchestratorState(config.orchestrator);
   return {
-    protocol: PROTOCOL, version: VERSION, createdAt: nowIso(), updatedAt: nowIso(), running: true,
-    slots, lastTickAt: null, lastGuardAt: null, lastGuardResult: null,
-    lastOrchestratorHeartbeatAt: null, lastOrchestratorSnapshotHash: "", events: [],
+    protocol: PROTOCOL,
+    version: VERSION,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    running: true,
+    slots,
+    lastTickAt: null,
+    lastGuardAt: null,
+    lastGuardResult: null,
+    lastEnsureTabsAt: null,
+    lastEnsureTabsResult: null,
+    lastOrchestratorHeartbeatAt: null,
+    lastOrchestratorSnapshotHash: "",
+    events: [],
   };
 }
 
@@ -138,6 +214,18 @@ class CdpClient {
     return (await response.json()).filter((row) => row.type === "page" && row.webSocketDebuggerUrl);
   }
 
+  async createTarget(url) {
+    const encoded = encodeURIComponent(String(url));
+    const response = await fetch(`${this.baseHttp}/json/new?${encoded}`, {
+      method: "PUT",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new Error(`CDP create target failed: HTTP ${response.status}`);
+    const target = await response.json();
+    if (!target?.id || !target?.webSocketDebuggerUrl) throw new Error("CDP create target returned no page target");
+    return target;
+  }
+
   async evaluate(target, expression, timeoutMs = 8000) {
     if (!globalThis.WebSocket) throw new Error("Node.js 22+ is required: global WebSocket is unavailable");
     return new Promise((resolve, reject) => {
@@ -153,7 +241,8 @@ class CdpClient {
       };
       const timer = setTimeout(() => finish(reject, new Error(`CDP Runtime.evaluate timed out after ${timeoutMs} ms`)), timeoutMs);
       ws.addEventListener("open", () => ws.send(JSON.stringify({
-        id: requestId, method: "Runtime.evaluate",
+        id: requestId,
+        method: "Runtime.evaluate",
         params: { expression, returnByValue: true, awaitPromise: true, userGesture: true },
       })));
       ws.addEventListener("message", (event) => {
@@ -237,6 +326,7 @@ class SessionFarm {
     this.cdp = new CdpClient(config.cdp.http);
     this.targetsById = new Map();
     this.slotLocks = new Map();
+    this.ensureTabsTail = Promise.resolve();
     this.tickInFlight = false;
     this.stopping = false;
     this.lastGuardMs = 0;
@@ -247,6 +337,12 @@ class SessionFarm {
     if (this.state.protocol !== PROTOCOL) this.state = defaultState(this.config);
     const defaults = defaultState(this.config);
     for (const [id, value] of Object.entries(defaults.slots)) this.state.slots[id] ||= value;
+    for (const [id, defaultsForSlot] of Object.entries(defaults.slots)) {
+      const slot = this.state.slots[id];
+      for (const [key, value] of Object.entries(defaultsForSlot)) {
+        if (slot[key] === undefined) slot[key] = clone(value);
+      }
+    }
     for (const worker of this.config.workers) {
       const slot = this.state.slots[worker.id];
       slot.continuationTimes ||= [];
@@ -261,6 +357,8 @@ class SessionFarm {
     }
     const orch = this.state.slots[this.config.orchestrator.id];
     orch.controlProgress ||= { hash: "", done: [] };
+    this.state.lastEnsureTabsAt ||= null;
+    this.state.lastEnsureTabsResult ||= null;
     this.state.running = true;
     await this.persist();
   }
@@ -284,14 +382,44 @@ class SessionFarm {
     finally { release(); if (this.slotLocks.get(id) === tailPromise) this.slotLocks.delete(id); }
   }
 
+  async withEnsureTabsLock(fn) {
+    const previous = this.ensureTabsTail;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const tailPromise = previous.then(() => gate);
+    this.ensureTabsTail = tailPromise;
+    await previous;
+    try { return await fn(); }
+    finally {
+      release();
+      if (this.ensureTabsTail === tailPromise) this.ensureTabsTail = Promise.resolve();
+    }
+  }
+
   clearObserved(slot, status = "missing") {
-    slot.targetId = null; slot.status = status; slot.ready = false; slot.busy = false; slot.markerPresent = false;
-    slot.lastAssistant = ""; slot.lastAssistantHash = ""; slot.lastProbeAt = nowIso(); slot.lastError = null;
+    slot.targetId = null;
+    slot.observedUrl = "";
+    slot.status = status;
+    slot.ready = false;
+    slot.busy = false;
+    slot.markerPresent = false;
+    slot.lastAssistant = "";
+    slot.lastAssistantHash = "";
+    slot.lastProbeAt = nowIso();
+    slot.lastError = null;
   }
 
   _chatTargets(targets) {
-    let regex; try { regex = new RegExp(this.config.browser?.chatUrlRegex || "^https://chatgpt\\.com/"); } catch { regex = /^https:\/\/chatgpt\.com\//; }
+    const regex = chatRegex(this.config);
     return targets.filter((t) => regex.test(String(t.url || "")));
+  }
+
+  _rememberChatUrl(slot, candidate) {
+    const value = String(candidate || "").trim();
+    if (!isAllowedChatUrl(value, this.config.browser || {})) return false;
+    const currentSpecific = isSpecificChatUrl(slot.boundUrl, this.config.browser || {});
+    if (isSpecificChatUrl(value, this.config.browser || {}) || !currentSpecific) slot.boundUrl = value;
+    return true;
   }
 
   _matchTarget(targets, cfg, slot) {
@@ -303,30 +431,140 @@ class SessionFarm {
     return null;
   }
 
+  _pendingSpawnTarget(targets, slot) {
+    if (!slot.spawnTargetId || !slot.spawnRequestedAt) return null;
+    const target = targets.find((candidate) => candidate.id === slot.spawnTargetId) || null;
+    const state = spawnClaimState(
+      slot.spawnTargetId,
+      slot.spawnRequestedAt,
+      Boolean(target),
+      Date.now(),
+      Number(this.config.browser?.spawnGraceMs || 15000),
+    );
+    if (state === "target-live") return target;
+    if (state === "expired") {
+      slot.spawnTargetId = null;
+      slot.spawnRequestedAt = null;
+    }
+    return null;
+  }
+
+  _bindTarget(slot, target, claimed, status = null) {
+    slot.targetId = target.id;
+    slot.observedUrl = target.url || "";
+    this._rememberChatUrl(slot, target.url);
+    slot.title = target.title || "";
+    if (status) slot.status = status;
+    claimed.add(target.id);
+  }
+
   async resolveTargets(targets) {
     this.targetsById = new Map(targets.map((t) => [t.id, t]));
-    const chatTargets = this._chatTargets(targets), claimed = new Set();
-    const orchCfg = this.config.orchestrator, orch = this.state.slots[orchCfg.id];
-    const orchTarget = this._matchTarget(chatTargets, orchCfg, orch);
-    if (orchTarget) { orch.targetId = orchTarget.id; orch.boundUrl = orchTarget.url; orch.title = orchTarget.title || ""; claimed.add(orchTarget.id); }
-    else this.clearObserved(orch);
+    const chatTargets = this._chatTargets(targets);
+    const claimed = new Set();
+
+    const orchCfg = this.config.orchestrator;
+    const orch = this.state.slots[orchCfg.id];
+    const orchPending = this._pendingSpawnTarget(targets, orch);
+    const orchTarget = orchPending || this._matchTarget(chatTargets, orchCfg, orch);
+    if (orchTarget) {
+      this._bindTarget(orch, orchTarget, claimed, orchPending ? "spawn-loading" : null);
+      if (!orchPending) { orch.spawnTargetId = null; orch.spawnRequestedAt = null; }
+    } else {
+      this.clearObserved(orch);
+    }
 
     const unresolved = [];
     for (const cfg of this.config.workers) {
       const slot = this.state.slots[cfg.id];
-      const target = this._matchTarget(chatTargets.filter((t) => !claimed.has(t.id)), cfg, slot);
-      if (target) { slot.targetId = target.id; slot.boundUrl = target.url; slot.title = target.title || ""; claimed.add(target.id); }
-      else { this.clearObserved(slot); unresolved.push({ cfg, slot }); }
+      const pending = this._pendingSpawnTarget(targets, slot);
+      const target = pending || this._matchTarget(chatTargets.filter((t) => !claimed.has(t.id)), cfg, slot);
+      if (target && !claimed.has(target.id)) {
+        this._bindTarget(slot, target, claimed, pending ? "spawn-loading" : null);
+        if (!pending) { slot.spawnTargetId = null; slot.spawnRequestedAt = null; }
+      } else {
+        this.clearObserved(slot);
+        unresolved.push({ cfg, slot });
+      }
     }
+
     if (this.config.browser?.autoAssignUnboundWorkers) {
       const available = chatTargets.filter((t) => !claimed.has(t.id)).sort((a,b)=>`${a.title}\n${a.url}`.localeCompare(`${b.title}\n${b.url}`));
       for (const { cfg, slot } of unresolved) {
-        if (cfg.urlIncludes || slot.boundUrl) continue;
+        if (cfg.urlIncludes || slot.boundUrl || slot.spawnTargetId) continue;
         const target = available.shift(); if (!target) break;
-        slot.targetId = target.id; slot.boundUrl = target.url; slot.title = target.title || ""; claimed.add(target.id);
+        this._bindTarget(slot, target, claimed);
         this.event("auto-bound", { slot: slot.id, url: target.url, targetId: target.id });
       }
     }
+  }
+
+  async ensureTabs(options = {}) {
+    return this.withEnsureTabsLock(async () => {
+      let targets = await this.cdp.targets();
+      await this.resolveTargets(targets);
+      const result = await this._ensureTabs(options);
+      if (result.created?.length) {
+        await sleep(Number(this.config.browser?.postSpawnSettleMs || 750));
+        targets = await this.cdp.targets();
+        await this.resolveTargets(targets);
+      }
+      return result;
+    });
+  }
+
+  async _ensureTabs({ force = false } = {}) {
+    if (!force && !this.config.browser?.ensureTabs) return { ok: true, skipped: true, reason: "disabled", created: [] };
+    const created = [];
+    const existing = [];
+    const failures = [];
+    const slotDefs = [
+      { cfg: this.config.orchestrator, slot: this.state.slots[this.config.orchestrator.id] },
+      ...this.config.workers.map((cfg) => ({ cfg, slot: this.state.slots[cfg.id] })),
+    ];
+
+    for (const { cfg, slot } of slotDefs) {
+      if (slot.targetId && this.targetsById.has(slot.targetId)) {
+        existing.push({ slot: slot.id, targetId: slot.targetId });
+        continue;
+      }
+      const pending = this._pendingSpawnTarget([...this.targetsById.values()], slot);
+      if (pending) {
+        existing.push({ slot: slot.id, targetId: pending.id, pending: true, listed: true });
+        continue;
+      }
+      if (slot.spawnTargetId && slot.spawnRequestedAt) {
+        existing.push({ slot: slot.id, targetId: slot.spawnTargetId, pending: true, listed: false });
+        continue;
+      }
+      let launchUrl;
+      try {
+        launchUrl = slotLaunchUrl(cfg, slot, this.config.browser || {});
+        const target = await this.cdp.createTarget(launchUrl);
+        slot.spawnTargetId = target.id;
+        slot.spawnRequestedAt = nowIso();
+        slot.spawnCount = Number(slot.spawnCount || 0) + 1;
+        slot.targetId = target.id;
+        slot.observedUrl = target.url || launchUrl;
+        this._rememberChatUrl(slot, target.url || launchUrl);
+        slot.title = target.title || "";
+        slot.status = "spawned";
+        this.targetsById.set(target.id, target);
+        this.event("tab-spawned", { slot: slot.id, role: slot.role, targetId: target.id, launchUrl });
+        created.push({ slot: slot.id, role: slot.role, targetId: target.id, launchUrl });
+        await sleep(Number(this.config.browser?.spawnSpacingMs || 250));
+      } catch (error) {
+        const failure = { slot: slot.id, role: slot.role, error: String(error?.message || error), launchUrl: launchUrl || null };
+        failures.push(failure);
+        this.event("tab-spawn-failed", failure);
+      }
+    }
+
+    const result = { ok: failures.length === 0, created, existing, failures, at: nowIso() };
+    this.state.lastEnsureTabsAt = result.at;
+    this.state.lastEnsureTabsResult = result;
+    await this.persist();
+    return result;
   }
 
   async probeAll() {
@@ -336,12 +574,30 @@ class SessionFarm {
       if (!target) { this.clearObserved(slot); continue; }
       try {
         const p = await this.cdp.probe(target);
-        slot.title = p?.title || target.title || ""; slot.boundUrl = p?.href || target.url || slot.boundUrl;
-        slot.busy = Boolean(p?.busy); slot.ready = Boolean(p?.ready); slot.status = slot.busy ? "busy" : slot.ready ? "ready" : "not-ready";
-        slot.lastAssistant = String(p?.lastAssistant || ""); slot.lastAssistantHash = slot.lastAssistant ? hashText(slot.lastAssistant) : "";
-        slot.markerPresent = slot.lastAssistant.includes(this.config.continuation.marker); slot.lastProbeAt = nowIso(); slot.lastError = null;
+        slot.title = p?.title || target.title || "";
+        const observedUrl = p?.href || target.url || "";
+        slot.observedUrl = observedUrl;
+        const allowedChat = this._rememberChatUrl(slot, observedUrl);
+        slot.busy = Boolean(p?.busy);
+        slot.ready = Boolean(p?.ready);
+        slot.status = slot.busy ? "busy" : slot.ready ? "ready" : "not-ready";
+        slot.lastAssistant = String(p?.lastAssistant || "");
+        slot.lastAssistantHash = slot.lastAssistant ? hashText(slot.lastAssistant) : "";
+        slot.markerPresent = slot.lastAssistant.includes(this.config.continuation.marker);
+        slot.lastProbeAt = nowIso();
+        slot.lastError = null;
+        const stableSpecific = isSpecificChatUrl(slot.boundUrl, this.config.browser || {});
+        const observedSpecific = isSpecificChatUrl(observedUrl, this.config.browser || {});
+        if (allowedChat && (!stableSpecific || observedSpecific)) {
+          slot.spawnTargetId = null;
+          slot.spawnRequestedAt = null;
+        }
       } catch (error) {
-        slot.status = "probe-error"; slot.ready = false; slot.busy = false; slot.lastError = String(error?.message || error); slot.lastProbeAt = nowIso();
+        slot.status = "probe-error";
+        slot.ready = false;
+        slot.busy = false;
+        slot.lastError = String(error?.message || error);
+        slot.lastProbeAt = nowIso();
         this.event("probe-error", { slot: slot.id, error: slot.lastError });
       }
     }
@@ -454,21 +710,54 @@ class SessionFarm {
   async tick(){
     if(this.tickInFlight)return{ok:false,skipped:true,reason:"tick-already-running"};this.tickInFlight=true;
     try{
-      let guard=null;const guardInterval=Number(this.config.guard?.intervalMs||5000);if(Date.now()-this.lastGuardMs>=guardInterval){try{guard=await this.guardApply();}catch(error){guard={ok:false,error:String(error?.message||error)};this.event("guard-error",guard);}this.lastGuardMs=Date.now();}
-      const targets=await this.cdp.targets();await this.resolveTargets(targets);await this.probeAll();
+      let guard=null;
+      const guardInterval=Number(this.config.guard?.intervalMs||5000);
+      if(Date.now()-this.lastGuardMs>=guardInterval){
+        try{guard=await this.guardApply();}catch(error){guard={ok:false,error:String(error?.message||error)};this.event("guard-error",guard);}
+        this.lastGuardMs=Date.now();
+      }
+      const tabs=await this.ensureTabs();
+      await this.probeAll();
       const controls=await this.maybeApplyOrchestratorControl(),continuations=[];
       for(const worker of this.config.workers){const result=await this.continueSlot(worker.id);if(result.ok||!result.skipped)continuations.push({worker:worker.id,...result});if(result.ok)await sleep(300);}
-      const heartbeat=await this.maybeHeartbeatOrchestrator();this.state.lastTickAt=nowIso();await this.persist();return{ok:true,at:this.state.lastTickAt,guard,controls,continuations,heartbeat};
+      const heartbeat=await this.maybeHeartbeatOrchestrator();
+      this.state.lastTickAt=nowIso();
+      await this.persist();
+      return{ok:true,at:this.state.lastTickAt,guard,tabs,controls,continuations,heartbeat};
     }catch(error){const message=String(error?.stack||error?.message||error);this.event("tick-error",{error:message});this.state.lastTickAt=nowIso();await this.persist();return{ok:false,at:this.state.lastTickAt,error:message};}
     finally{this.tickInFlight=false;}
   }
 
   publicStatus(){
-    const slots={};for(const[id,s]of Object.entries(this.state.slots))slots[id]={id:s.id,role:s.role,paused:s.paused,boundUrl:s.boundUrl,targetId:s.targetId,title:s.title,status:s.status,ready:s.ready,busy:s.busy,markerPresent:s.markerPresent,lastAssistantHash:s.lastAssistantHash,lastAssistantTail:tail(s.lastAssistant,1200),lastContinuationAt:s.lastContinuationAt||null,inFlightAssistantHash:s.inFlightAssistantHash||"",lastProbeAt:s.lastProbeAt,lastError:s.lastError};
-    return{protocol:PROTOCOL,version:VERSION,running:this.state.running,configPath:this.configPath,statePath:this.statePath,lastTickAt:this.state.lastTickAt,lastGuardAt:this.state.lastGuardAt,lastOrchestratorHeartbeatAt:this.state.lastOrchestratorHeartbeatAt,slots,recentEvents:asArray(this.state.events).slice(-30)};
+    const slots={};
+    for(const[id,s]of Object.entries(this.state.slots))slots[id]={
+      id:s.id,role:s.role,paused:s.paused,boundUrl:s.boundUrl,observedUrl:s.observedUrl||"",targetId:s.targetId,title:s.title,status:s.status,
+      ready:s.ready,busy:s.busy,markerPresent:s.markerPresent,lastAssistantHash:s.lastAssistantHash,
+      lastAssistantTail:tail(s.lastAssistant,1200),lastContinuationAt:s.lastContinuationAt||null,
+      inFlightAssistantHash:s.inFlightAssistantHash||"",lastProbeAt:s.lastProbeAt,lastError:s.lastError,
+      spawnTargetId:s.spawnTargetId||null,spawnRequestedAt:s.spawnRequestedAt||null,spawnCount:Number(s.spawnCount||0),
+    };
+    return{
+      protocol:PROTOCOL,version:VERSION,running:this.state.running,configPath:this.configPath,statePath:this.statePath,
+      lastTickAt:this.state.lastTickAt,lastGuardAt:this.state.lastGuardAt,lastEnsureTabsAt:this.state.lastEnsureTabsAt,
+      lastEnsureTabsResult:this.state.lastEnsureTabsResult,lastOrchestratorHeartbeatAt:this.state.lastOrchestratorHeartbeatAt,
+      slots,recentEvents:asArray(this.state.events).slice(-30),
+    };
   }
 
-  async bind(id,url){const slot=this.state.slots[id];if(!slot)return{ok:false,error:"unknown-slot"};slot.boundUrl=String(url||"").trim();this.clearObserved(slot,slot.boundUrl?"bound-awaiting-target":"unbound");slot.boundUrl=String(url||"").trim();this.event("manual-bind",{slot:id,url:slot.boundUrl});await this.persist();return{ok:true,slot:id,boundUrl:slot.boundUrl};}
+  async bind(id,url){
+    const slot=this.state.slots[id];
+    if(!slot)return{ok:false,error:"unknown-slot"};
+    slot.boundUrl=String(url||"").trim();
+    slot.observedUrl="";
+    slot.spawnTargetId=null;
+    slot.spawnRequestedAt=null;
+    this.clearObserved(slot,slot.boundUrl?"bound-awaiting-target":"unbound");
+    slot.boundUrl=String(url||"").trim();
+    this.event("manual-bind",{slot:id,url:slot.boundUrl});
+    await this.persist();
+    return{ok:true,slot:id,boundUrl:slot.boundUrl};
+  }
 }
 
 async function parseBody(req){const chunks=[];for await(const chunk of req)chunks.push(chunk);return chunks.length?JSON.parse(Buffer.concat(chunks).toString("utf8")):{};}
@@ -482,6 +771,7 @@ async function createControlServer(farm){
     if(req.method!=="POST")return sendJson(res,404,{ok:false,error:"not-found"});
     const body=await parseBody(req);
     if(url.pathname==="/tick")return sendJson(res,200,await farm.tick());
+    if(url.pathname==="/ensure-tabs")return sendJson(res,200,await farm.ensureTabs({force:true}));
     if(url.pathname==="/continue")return sendJson(res,200,await farm.continueSlot(String(body.worker||""),{force:true,prompt:body.prompt??null,reason:"mcp-manual"}));
     if(url.pathname==="/pause"||url.pathname==="/resume"){const slot=farm.state.slots[String(body.worker||"")];if(!slot||slot.role!=="worker")return sendJson(res,404,{ok:false,error:"unknown-worker"});slot.paused=url.pathname==="/pause";await farm.persist();return sendJson(res,200,{ok:true,worker:slot.id,paused:slot.paused});}
     if(url.pathname==="/bind")return sendJson(res,200,await farm.bind(String(body.slot||""),String(body.url||"")));
