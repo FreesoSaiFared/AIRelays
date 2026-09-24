@@ -25,8 +25,8 @@ def _program_data() -> Path:
 class SessionFarmBridge:
     """Fixed-function bridge from the durable Windows relay into AIRelays Session Farm.
 
-    This deliberately does not expose a generic shell. The only process launch is the
-    canonical deployer or daemon entrypoint under a validated AIRelays repository root.
+    This deliberately does not expose a generic shell. Process launch is limited to
+    the canonical deployer and the already-installed AIRelays-SessionFarm task.
     """
 
     def __init__(self, device_config: dict[str, Any]) -> None:
@@ -54,7 +54,7 @@ class SessionFarmBridge:
         raw = args.get("repoRoot") or settings.get("repoRoot") or self.device_config.get("airelaysRepoRoot") or os.environ.get("AIRELAYS_REPO_ROOT")
         if not raw:
             if required:
-                raise RuntimeError("AIRelays repository root is not configured; pass repoRoot once to farm_deploy or farm_start")
+                raise RuntimeError("AIRelays repository root is not configured; pass repoRoot to farm_deploy")
             return None
         root = Path(str(raw)).expanduser().resolve()
         marker = root / "tools" / "session-farm" / "session-farm.mjs"
@@ -116,42 +116,44 @@ class SessionFarmBridge:
         except Exception:
             return False
 
-    def _node(self) -> str:
-        node = shutil.which("node.exe") or shutil.which("node")
-        if not node:
-            raise RuntimeError("Node.js 22+ is required but node.exe was not found on PATH")
-        return node
-
     def _powershell(self) -> str:
         value = shutil.which("powershell.exe") or shutil.which("powershell")
         if not value:
             raise RuntimeError("powershell.exe was not found")
         return value
 
-    def _start(self, repo_root: Path, config_path: Path) -> dict[str, Any]:
+    def _start(self, config_path: Path) -> dict[str, Any]:
         if self._healthy(config_path):
             return {"ok": True, "alreadyRunning": True, "configPath": str(config_path)}
-        entry = repo_root / "tools" / "session-farm" / "session-farm.mjs"
-        creationflags = 0
-        for name in ("CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS", "CREATE_NO_WINDOW"):
-            creationflags |= int(getattr(subprocess, name, 0))
-        proc = subprocess.Popen(
-            [self._node(), str(entry), "--config", str(config_path)],
-            cwd=str(repo_root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=creationflags,
+        command = (
+            "$t=Get-ScheduledTask -TaskName 'AIRelays-SessionFarm' -ErrorAction Stop; "
+            "if ($t.State -ne 'Running') { Start-ScheduledTask -TaskName 'AIRelays-SessionFarm'; 'started' } "
+            "else { 'already-running-but-unhealthy' }"
         )
+        completed = subprocess.run(
+            [self._powershell(), "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"AIRelays-SessionFarm scheduled task could not be started: {completed.stderr[-4000:]}")
         deadline = time.monotonic() + 12.0
         while time.monotonic() < deadline:
             if self._healthy(config_path):
-                return {"ok": True, "alreadyRunning": False, "pid": proc.pid, "configPath": str(config_path)}
-            if proc.poll() is not None:
-                raise RuntimeError(f"session-farm daemon exited early with code {proc.returncode}")
+                return {
+                    "ok": True,
+                    "alreadyRunning": False,
+                    "configPath": str(config_path),
+                    "taskAction": completed.stdout.strip(),
+                }
             time.sleep(0.25)
-        raise RuntimeError(f"session-farm daemon did not become healthy; launcher pid={proc.pid}")
+        raise RuntimeError(
+            "AIRelays-SessionFarm task exists but daemon did not become healthy; "
+            f"taskAction={completed.stdout.strip()!r}"
+        )
 
     def _deploy(self, args: dict[str, Any]) -> dict[str, Any]:
         root = self._repo_root(args, required=True)
@@ -197,13 +199,12 @@ class SessionFarmBridge:
             return self._deploy(args)
 
         config_path = self._config_path(args)
-        root = self._repo_root(args, required=name == "farm_start")
+        root = self._repo_root(args, required=False)
         if root is not None or args.get("configPath"):
             self._remember(root, config_path)
 
         if name == "farm_start":
-            assert root is not None
-            return self._start(root, config_path)
+            return self._start(config_path)
         if name == "farm_status":
             return self._http(config_path, "/status")
         if name == "farm_tick":
