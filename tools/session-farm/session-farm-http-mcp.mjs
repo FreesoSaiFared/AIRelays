@@ -10,7 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(HERE, "session-farm.config.json");
 const DAEMON = path.join(HERE, "session-farm.mjs");
 const DASHBOARD = path.join(HERE, "session-farm-dashboard.html");
-const VERSION = "0.1.1";
+const VERSION = "0.2.0";
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -63,8 +63,9 @@ async function ensureDaemon(configPath) {
 
 const TOOLS = [
   ["farm_start", "Start the persistent six-worker plus orchestrator session farm.", {}],
-  ["farm_status", "Read verified worker/orchestrator readiness, bindings, continuation and guard state.", {}],
-  ["farm_tick", "Force one complete supervision cycle.", {}],
+  ["farm_status", "Read verified worker/orchestrator readiness, bindings, continuation, tab-spawn and guard state.", {}],
+  ["farm_tick", "Force one complete supervision cycle, including tab self-healing when enabled.", {}],
+  ["farm_ensure_tabs", "Immediately ensure one live ChatGPT tab exists for each of the six workers and the orchestrator. Missing tabs are opened through Brave/Chromium CDP without a browser extension.", {}],
   ["farm_continue", "Continue one ready worker; prompt defaults to the generic continuation prompt.", {
     worker: { type: "string", enum: ["w1", "w2", "w3", "w4", "w5", "w6"] },
     prompt: { type: "string" },
@@ -92,6 +93,7 @@ async function callTool(configPath, name, args = {}) {
   switch (name) {
     case "farm_status": return daemonApi(configPath, "/status");
     case "farm_tick": return daemonApi(configPath, "/tick", { method: "POST", body: {} });
+    case "farm_ensure_tabs": return daemonApi(configPath, "/ensure-tabs", { method: "POST", body: {} });
     case "farm_continue": return daemonApi(configPath, "/continue", { method: "POST", body: { worker: args.worker, ...(args.prompt == null ? {} : { prompt: args.prompt }) } });
     case "farm_pause": return daemonApi(configPath, "/pause", { method: "POST", body: { worker: args.worker } });
     case "farm_resume": return daemonApi(configPath, "/resume", { method: "POST", body: { worker: args.worker } });
@@ -120,7 +122,7 @@ async function handleRpc(configPath, message) {
     protocolVersion: params.protocolVersion || "2025-06-18",
     capabilities: { tools: { listChanged: false } },
     serverInfo: { name: "airelays-session-farm-http", version: VERSION },
-    instructions: "Control a persistent six-worker ChatGPT continuation farm. Workers normally define their own next turn and the farm submits only the configured generic continuation prompt. The orchestrator intervenes only when needed. No browser extension is required.",
+    instructions: "Control a persistent six-worker ChatGPT continuation farm. Workers normally define their own next turn and the farm submits only the configured generic continuation prompt. Missing worker/orchestrator tabs can be reopened through Brave CDP. The orchestrator intervenes only when needed. No browser extension is required.",
   });
   if (method === "ping") return jsonRpcResult(id, {});
   if (method === "tools/list") return jsonRpcResult(id, { tools: TOOLS });
@@ -186,6 +188,7 @@ async function dashboardApi(configPath, url, req) {
   if (url.pathname === "/api/pause") return daemonApi(configPath, "/pause", { method: "POST", body: { worker: body.worker } });
   if (url.pathname === "/api/resume") return daemonApi(configPath, "/resume", { method: "POST", body: { worker: body.worker } });
   if (url.pathname === "/api/tick") return daemonApi(configPath, "/tick", { method: "POST", body: {} });
+  if (url.pathname === "/api/ensure-tabs") return daemonApi(configPath, "/ensure-tabs", { method: "POST", body: {} });
   if (url.pathname === "/api/guard") return daemonApi(configPath, "/guard", { method: "POST", body: {} });
   throw new Error("not-found");
 }
