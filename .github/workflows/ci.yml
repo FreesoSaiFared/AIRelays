@@ -40,6 +40,25 @@ jobs:
       - name: Byte-compile source and tests
         run: python -m compileall src tests
 
+  session-farm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run session-farm state-machine tests
+        run: node --test tools/session-farm/session-farm.test.mjs
+
+      - name: Syntax-check session-farm entrypoints
+        run: |
+          node --check tools/session-farm/session-farm.mjs
+          node --check tools/session-farm/session-farm-mcp.mjs
+
   build:
     runs-on: ubuntu-latest
     steps:
