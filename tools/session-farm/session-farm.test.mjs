@@ -22,6 +22,7 @@ function slot(overrides = {}) {
     markerPresent: true,
     lastAssistantHash: hashText("finished turn"),
     lastContinuationAssistantHash: "",
+    inFlightAssistantHash: "",
     lastContinuationAt: null,
     continuationTimes: [],
     ...overrides,
@@ -47,6 +48,17 @@ test("worker continuation is one-shot per assistant output", () => {
   assert.equal(isEligibleContinuation(s, policy(), Date.now()).reason, "already-continued-this-output");
 });
 
+test("persisted in-flight claim blocks a duplicate after a send race", () => {
+  const s = slot();
+  s.inFlightAssistantHash = s.lastAssistantHash;
+  assert.equal(isEligibleContinuation(s, policy(), Date.now()).reason, "in-flight");
+});
+
+test("a stale in-flight claim for an older output does not block a new output", () => {
+  const s = slot({ inFlightAssistantHash: hashText("older turn") });
+  assert.deepEqual(isEligibleContinuation(s, policy(), Date.now()), { ok: true, reason: "eligible" });
+});
+
 test("marker, busy and pause gates are explicit", () => {
   assert.equal(isEligibleContinuation(slot({ markerPresent: false }), policy(), Date.now()).reason, "marker-absent");
   assert.equal(isEligibleContinuation(slot({ busy: true, ready: false }), policy(), Date.now()).reason, "not-ready");
@@ -57,6 +69,12 @@ test("hourly cap stops runaway continuation", () => {
   const now = Date.now();
   const s = slot({ continuationTimes: [new Date(now - 1000).toISOString(), new Date(now - 2000).toISOString()] });
   assert.equal(isEligibleContinuation(s, policy({ maxPerHourPerSession: 2 }), now).reason, "hourly-limit");
+});
+
+test("cooldown gate prevents rapid repeated continuation", () => {
+  const now = Date.now();
+  const s = slot({ lastContinuationAt: new Date(now - 1000).toISOString() });
+  assert.equal(isEligibleContinuation(s, policy({ cooldownMs: 5000 }), now).reason, "cooldown");
 });
 
 test("extractFarmControl parses the last machine control envelope", () => {
@@ -70,4 +88,9 @@ test("extractFarmControl tolerates braces inside JSON strings", () => {
   const text = `[[FARM_CONTROL/1]] {"actions":[{"worker":"w1","action":"nudge","prompt":"keep {x} intact"}]}`;
   const parsed = extractFarmControl(text);
   assert.equal(parsed.actions[0].prompt, "keep {x} intact");
+});
+
+test("extractFarmControl uses the last envelope in a reply", () => {
+  const text = `[[FARM_CONTROL/1]] {"actions":[{"worker":"w1","action":"pause"}]}\nnotes\n[[FARM_CONTROL/1]] {"actions":[]}`;
+  assert.deepEqual(extractFarmControl(text), { actions: [] });
 });
