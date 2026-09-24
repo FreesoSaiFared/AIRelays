@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,6 +49,41 @@ class SessionFarmBridgeTests(unittest.TestCase):
         self.assertEqual(SessionFarmBridge._worker({"worker": "w6"}), "w6")
         with self.assertRaisesRegex(RuntimeError, "w1..w6"):
             SessionFarmBridge._worker({"worker": "w7"})
+
+    def test_seed_passes_prompt_over_stdin_not_command_line(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            script = root / "tools" / "session-farm" / "seed-session.mjs"
+            script.parent.mkdir(parents=True)
+            script.write_text("// fixture", encoding="utf-8")
+            config = root / "config.json"
+            config.write_text("{}", encoding="utf-8")
+            bridge = SessionFarmBridge({})
+            completed = subprocess.CompletedProcess(
+                args=["node"], returncode=0,
+                stdout='{"ok":true,"slot":"w1","verified":true}\n', stderr="",
+            )
+            with patch.object(bridge, "_repo_root", return_value=root), patch.object(
+                bridge, "_node", return_value="node.exe"
+            ), patch.object(bridge, "_remember"), patch(
+                "transductive_agent.session_farm_bridge.subprocess.run", return_value=completed
+            ) as run:
+                receipt = bridge._seed({"slot": "w1", "prompt": "mission secret"}, config)
+            self.assertTrue(receipt["ok"])
+            argv = run.call_args.args[0]
+            self.assertNotIn("mission secret", argv)
+            self.assertEqual(run.call_args.kwargs["input"], "mission secret")
+            self.assertIn("--slot", argv)
+            self.assertIn("w1", argv)
+
+    def test_seed_rejects_unknown_slot_before_process_launch(self) -> None:
+        bridge = SessionFarmBridge({})
+        with patch.object(bridge, "_repo_root", return_value=Path(".")), patch(
+            "transductive_agent.session_farm_bridge.subprocess.run"
+        ) as run:
+            with self.assertRaisesRegex(RuntimeError, "w1..w6 or orch"):
+                bridge._seed({"slot": "w7", "prompt": "mission"}, Path("config.json"))
+            run.assert_not_called()
 
 
 if __name__ == "__main__":
