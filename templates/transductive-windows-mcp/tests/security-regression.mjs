@@ -23,7 +23,7 @@ assert.match(mcp, /readOnlyHint === true[\s\S]*windows\.read/);
 assert.match(index, /name === 'farm_deploy'\) return 300_000/);
 assert.match(relay, /farm\.call\(name, args\) if farm\.handles\(name\) else upstream\.call_tool\(name, args\)/);
 
-assert.match(bridge, /tools[\\\/]session-farm[\\\/]deploy-windows\.ps1/);
+assert.match(bridge, /root \/ "tools" \/ "session-farm" \/ "deploy-windows\.ps1"/);
 assert.match(bridge, /if host not in \{"127\.0\.0\.1", "localhost", "::1"\}/);
 assert.match(bridge, /if not url\.startswith\("https:\/\/chatgpt\.com\/"\)/);
 assert.doesNotMatch(bridge, /shell\s*=\s*True/);
