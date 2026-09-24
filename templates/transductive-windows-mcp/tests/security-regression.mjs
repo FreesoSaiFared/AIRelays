@@ -6,6 +6,7 @@ const mcp = fs.readFileSync(new URL('../src/mcp.ts', import.meta.url), 'utf8');
 const index = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 const relay = fs.readFileSync(new URL('../windows-agent/transductive_agent/relay_agent.py', import.meta.url), 'utf8');
 const bridge = fs.readFileSync(new URL('../windows-agent/transductive_agent/session_farm_bridge.py', import.meta.url), 'utf8');
+const upgrade = fs.readFileSync(new URL('../upgrade-existing.ps1', import.meta.url), 'utf8');
 
 const byName = new Map(SESSION_FARM_TOOLS.map((tool) => [tool.name, tool]));
 for (const name of ['farm_deploy', 'farm_tick', 'farm_guard', 'farm_stop']) {
@@ -30,4 +31,14 @@ assert.doesNotMatch(bridge, /shell\s*=\s*True/);
 assert.doesNotMatch(bridge, /os\.system\s*\(/);
 assert.doesNotMatch(bridge, /subprocess\.(?:call|run|Popen)\([^\n]*shell\s*=\s*True/);
 
-console.log('TRANSDUCTIVE_SESSION_FARM_SECURITY_REGRESSION_OK scope_boundary=pass fixed_deployer=pass loopback_only=pass chatgpt_bind_only=pass no_shell_true=pass');
+assert.match(upgrade, /ProgramData[^\n]*Transductive\\WindowsMCP/);
+assert.match(upgrade, /--force-reinstall/);
+assert.match(upgrade, /session_farm_bridge import SessionFarmBridge/);
+assert.match(upgrade, /Stop-ScheduledTask -TaskName \$RelayTaskName/);
+assert.match(upgrade, /Start-ScheduledTask -TaskName \$RelayTaskName/);
+assert.match(upgrade, /npm[^\n]*install[^\n]*--no-package-lock[^\n]*--ignore-scripts/i);
+assert.match(upgrade, /wrangler','deploy/);
+assert.doesNotMatch(upgrade, /OWNER_SETUP_TOKEN\s*=/);
+assert.doesNotMatch(upgrade, /deviceSecret/);
+
+console.log('TRANSDUCTIVE_SESSION_FARM_SECURITY_REGRESSION_OK scope_boundary=pass fixed_deployer=pass loopback_only=pass chatgpt_bind_only=pass no_shell_true=pass upgrade_preserves_secrets=pass');
