@@ -58,6 +58,7 @@ jobs:
         run: |
           node --check tools/session-farm/session-farm.mjs
           node --check tools/session-farm/session-farm-mcp.mjs
+          node --check tools/session-farm/session-farm-http-mcp.mjs
 
   build:
     runs-on: ubuntu-latest
