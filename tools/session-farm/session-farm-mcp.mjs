@@ -10,7 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = path.join(HERE, "session-farm.config.json");
 const DAEMON = path.join(HERE, "session-farm.mjs");
 const SERVER_NAME = "airelays-session-farm";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -86,12 +86,17 @@ const TOOLS = [
   },
   {
     name: "farm_status",
-    description: "Return verified binding, readiness, marker, continuation, guard, and orchestrator state for all six workers and the orchestrator.",
+    description: "Return verified binding, readiness, marker, continuation, tab-spawn, guard, and orchestrator state for all six workers and the orchestrator.",
     inputSchema: { type: "object", properties: { configPath: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "farm_tick",
-    description: "Force one complete supervision cycle: process guard, tab discovery, probes, orchestrator controls, worker continuation, and orchestrator heartbeat.",
+    description: "Force one complete supervision cycle: process guard, tab discovery/self-healing, probes, orchestrator controls, worker continuation, and orchestrator heartbeat.",
+    inputSchema: { type: "object", properties: { configPath: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "farm_ensure_tabs",
+    description: "Immediately ensure one live ChatGPT tab exists for each of the six workers and the orchestrator. Missing tabs are opened through Brave/Chromium CDP without using a browser extension.",
     inputSchema: { type: "object", properties: { configPath: { type: "string" } }, additionalProperties: false },
   },
   {
@@ -163,6 +168,8 @@ async function callTool(name, args = {}) {
       return api(configPath, "/status");
     case "farm_tick":
       return api(configPath, "/tick", { method: "POST", body: {} });
+    case "farm_ensure_tabs":
+      return api(configPath, "/ensure-tabs", { method: "POST", body: {} });
     case "farm_continue":
       return api(configPath, "/continue", { method: "POST", body: { worker: args.worker, ...(args.prompt == null ? {} : { prompt: args.prompt }) } });
     case "farm_pause":
@@ -204,7 +211,7 @@ async function handle(message) {
         protocolVersion: params.protocolVersion || "2025-06-18",
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-        instructions: "Control a persistent six-worker ChatGPT session farm. Ordinary continuation is generic and external: workers define their own next turn and end with the configured continuation marker; the daemon injects only the continuation prompt. The orchestrator receives compact status packets and intervenes only when needed. Browser extensions are not used.",
+        instructions: "Control a persistent six-worker ChatGPT session farm. Ordinary continuation is generic and external: workers define their own next turn and end with the configured continuation marker; the daemon injects only the continuation prompt. The daemon can also reopen missing worker/orchestrator tabs through Brave CDP. The orchestrator receives compact status packets and intervenes only when needed. Browser extensions are not used.",
       },
     });
   }
