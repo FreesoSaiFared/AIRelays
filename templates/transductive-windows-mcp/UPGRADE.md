@@ -2,8 +2,8 @@
 
 The Session Farm consolidation changes both halves of an existing deployment:
 
-1. the Cloudflare Worker must advertise the combined 155-tool MCP surface;
-2. the already-paired resident Windows relay must contain the fixed-function Session Farm bridge.
+1. the Cloudflare Worker must advertise the combined 156-tool MCP surface;
+2. the already-paired resident Windows relay must contain the fixed-function Session Farm bridge and one-shot seeder.
 
 Re-pairing the machine is not required. The device credentials remain in the existing DPAPI-protected config and the Cloudflare OAuth secrets remain remote.
 
@@ -29,7 +29,7 @@ To upgrade only one half:
 
 For troubleshooting only, `-SkipTests` bypasses pre-deploy validation. Do not use it for normal promotion.
 
-After a successful upgrade, reconnect or refresh the ChatGPT MCP/plugin connection if the current conversation cached the old tool list. `tools/list` should then expose 155 tools: 144 upstream Windows tools plus 11 `farm_*` controls.
+After a successful upgrade, reconnect or refresh the ChatGPT MCP/plugin connection if the current conversation cached the old tool list. `tools/list` should then expose 156 tools: 144 upstream Windows tools plus 12 `farm_*` controls.
 
 The next live acceptance sequence is:
 
@@ -37,6 +37,7 @@ The next live acceptance sequence is:
 2. if no farm is installed, call `farm_deploy` once with the verified AIRelays `repoRoot`;
 3. call `farm_ensure_tabs` twice and require the second call to create zero tabs;
 4. verify `w1` through `w6` plus `orch`;
-5. close one managed tab and require exactly one replacement;
-6. allow one marked worker output to receive exactly one generic `continue`;
-7. verify one orchestrator heartbeat and one targeted control action.
+5. seed a genuinely blank slot with `farm_seed`, then immediately repeat the same non-forced seed and require `existing-user-turn` rather than a duplicate first turn;
+6. close one managed tab and require exactly one replacement;
+7. allow one marked worker output to receive exactly one generic `continue`;
+8. verify one orchestrator heartbeat and one targeted control action.
