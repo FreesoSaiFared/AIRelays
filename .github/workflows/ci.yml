@@ -125,6 +125,11 @@ jobs:
       - name: Byte-compile resident Windows relay
         run: python -m compileall templates/transductive-windows-mcp/windows-agent/transductive_agent
 
+      - name: Run resident Session Farm bridge tests
+        env:
+          PYTHONPATH: templates/transductive-windows-mcp/windows-agent
+        run: python -m unittest discover -s templates/transductive-windows-mcp/windows-agent/tests -v
+
   build:
     runs-on: ubuntu-latest
     steps:
